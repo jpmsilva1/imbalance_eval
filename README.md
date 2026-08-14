@@ -212,3 +212,23 @@ pytest test_imbalance_eval.py -v
 - **Relevance bins** (grouping temporally-contiguous rare/normal observations, used for the paper's actual *resampling* algorithms) are not implemented — this tool only measures imbalance, it doesn't resample.
 - **No dataset auto-download.** You bring your own CSVs; fetching reference datasets (like UCI Bike Sharing) for validation is a manual step, not a CLI feature.
 - **KNN imputation is O(n²)** in sklearn's default brute-force mode — fine at the paper's scale (largest dataset ~240k rows), but worth knowing if you point this at something much larger and it happens to have missing values.
+
+---
+
+## 9. References
+
+**Paper this tool implements the relevance-function methodology from:**
+
+Moniz, N., Branco, P., & Torgo, L. (2017). Resampling strategies for imbalanced time series forecasting. *International Journal of Data Science and Analytics*, 3(3), 161–181. https://doi.org/10.1007/s41060-017-0044-3
+
+**Library used for the relevance function (φ) itself:**
+
+Branco, P. (ImbalancedLearningRegression contributors). *ImbalancedLearningRegression* [Python package]. PyPI: https://pypi.org/project/ImbalancedLearningRegression/ — GitHub: https://github.com/paobranco/ImbalancedLearningRegression
+
+The `phi()`/`phi_ctrl_pts()` relevance-function implementation in that package is itself a Python port of the R `UBL` package's method, based on:
+
+Ribeiro, R. P. (2011). *Utility-based regression* (PhD dissertation). Department of Computer Science, Faculty of Sciences, University of Porto.
+
+**Validation dataset used in §6:**
+
+Fanaee-T, H. (2013). Bike Sharing [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5W894 (CC BY 4.0)
