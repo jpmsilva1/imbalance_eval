@@ -1,3 +1,4 @@
+import pathlib
 import subprocess
 import sys
 
@@ -11,6 +12,8 @@ from imbalance_eval import (
     load_csv,
     time_delay_embedding,
 )
+
+REPO_ROOT = pathlib.Path(__file__).parent.resolve()
 
 
 def test_time_delay_embedding_known_lags():
@@ -173,7 +176,7 @@ def test_cli_single_file_mode(tmp_path):
         [sys.executable, "imbalance_eval.py", str(data_path),
          "--target", "temp", "--k", "2", "--threshold", "0.9",
          "--output", str(output_path)],
-        cwd="/Users/joaopms/Projeto Mestrado/imbalance_eval",
+        cwd=REPO_ROOT,
         capture_output=True, text=True,
     )
 
@@ -202,7 +205,7 @@ def test_cli_batch_mode(tmp_path):
     proc = subprocess.run(
         [sys.executable, "imbalance_eval.py", "--config", str(manifest_path),
          "--k", "2", "--threshold", "0.9", "--output", str(output_path)],
-        cwd="/Users/joaopms/Projeto Mestrado/imbalance_eval",
+        cwd=REPO_ROOT,
         capture_output=True, text=True,
     )
 
@@ -219,7 +222,7 @@ def test_cli_rejects_csv_path_and_config_together(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, "imbalance_eval.py", str(data_path), "--config", str(manifest_path)],
-        cwd="/Users/joaopms/Projeto Mestrado/imbalance_eval",
+        cwd=REPO_ROOT,
         capture_output=True, text=True,
     )
 
@@ -232,7 +235,7 @@ def test_cli_single_file_unknown_target_column_gives_clear_error(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, "imbalance_eval.py", str(data_path), "--target", "nope"],
-        cwd="/Users/joaopms/Projeto Mestrado/imbalance_eval",
+        cwd=REPO_ROOT,
         capture_output=True, text=True,
     )
 
@@ -249,7 +252,7 @@ def test_cli_batch_missing_manifest_column_gives_clear_error(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, "imbalance_eval.py", "--config", str(manifest_path)],
-        cwd="/Users/joaopms/Projeto Mestrado/imbalance_eval",
+        cwd=REPO_ROOT,
         capture_output=True, text=True,
     )
 

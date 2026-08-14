@@ -193,6 +193,20 @@ Using the real UCI Bike Sharing dataset (the paper's DS1–DS8 source):
 - **N matches exactly.** The paper's Table 1 lists DS1 (daily temperature) as having "731 values" — this is the *raw* series length, not the post-embedding length (which would be 731 − k = 721). This tells us Table 1's descriptive statistics characterize the raw series, **before** time delay embedding — so use `embed=False` when trying to reproduce Table 1 numbers directly.
 - **%Rare does not match at the default coefficient.** At `rel_coef=1.5` (the standard Tukey boxplot coefficient, and iblr's default), the daily temperature column has zero values outside the boxplot whiskers, giving `%Rare = 0.0`, versus the paper's reported `9.9%`. The temperature distribution isn't even skewed (skew ≈ −0.05), so this isn't a "standard vs. adjusted/medcouple boxplot" issue — skew-adjustment barely changes anything for a near-symmetric distribution. Sweeping `--coef` shows smaller values recover numbers in the paper's range (e.g. `coef=0.6` gives ~10.3%), but there's no principled way to know the paper's exact original coefficient without their source code, so this isn't hardcoded as a new default — `--coef` is exposed precisely so you can tune it once you have more datasets or the original script to cross-check against.
 
+### Investigated and ruled out: first-order differencing
+
+A prior review of this repo claimed the paper applied first-order differencing (`Δy_t = y_t - y_{t-1}`) before computing Table 1's statistics, and that this exactly reproduces the published `%Rare` values. This was checked against primary sources and does not hold up:
+
+- The full extracted text of the paper PDF contains no description of a differencing/detrending preprocessing step (searched "differenc", "delta", "stationar", "detrend" — only found unrelated descriptive language like "non-stationary characteristics of data portray a hard setting").
+- The paper's own released R code (`github.com/nunompmoniz/TSResampStrat_JDSA2017`, `Exps.R`) contains no `diff(` call anywhere in its 2,558 lines. Its embedding step (`create.data()`) is a direct call to R's `embed()`, nothing else.
+- Empirically, differencing the real UCI Bike Sharing `temp` column changes `N` from 731 to 730 (differencing always drops one row), but Table 1 explicitly states `N=731` for DS1. A hypothesis that must contradict one of the two numbers it's trying to explain isn't a valid explanation, even though the resulting `%Rare` (~10.0%) happens to land close to the paper's 9.9%.
+
+**Do not add a `--diff` flag or any differencing step based on this claim.** If a future contributor or agent proposes it again, this note and the evidence above should be the first thing checked before acting on it.
+
+### Open question: exact preprocessing to reproduce Table 1's %Rare
+
+The exact preprocessing pipeline needed to reproduce Table 1's `%Rare` values precisely is still unknown. The released `Exps.R` loads a pre-built `Data/data_NM_PB_LT_DSAA2016.Rdata` file and has its `knnImputation()` call commented out — meaning any imputation happened upstream, in a script not included in the public repo, and we cannot verify from available materials whether it ran before or after embedding. The paper's own prose (§4.1) describes imputation preceding embedding, which matches what this tool already does — but this has not been cross-checked against the actual `.Rdata` file, which isn't publicly available. Treat exact Table 1 replication as unresolved, not solved.
+
 ---
 
 ## 7. Running the tests
@@ -220,6 +234,10 @@ pytest test_imbalance_eval.py -v
 **Paper this tool implements the relevance-function methodology from:**
 
 Moniz, N., Branco, P., & Torgo, L. (2017). Resampling strategies for imbalanced time series forecasting. *International Journal of Data Science and Analytics*, 3(3), 161–181. https://doi.org/10.1007/s41060-017-0044-3
+
+**Original R code released by the paper's authors** (used to fact-check preprocessing claims in §6):
+
+https://github.com/nunompmoniz/TSResampStrat_JDSA2017
 
 **Library used for the relevance function (φ) itself:**
 
