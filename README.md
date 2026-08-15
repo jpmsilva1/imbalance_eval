@@ -1,4 +1,4 @@
-# imbalance_eval
+# Imbalanced Time Series Evaluation Library
 
 [![CI](https://github.com/jpmsilva1/imbalance_eval/actions/workflows/ci.yml/badge.svg)](https://github.com/jpmsilva1/imbalance_eval/actions/workflows/ci.yml)
 
