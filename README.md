@@ -18,9 +18,9 @@ DS1    temp 731        Daily       658      73  9.0  10.0
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [Usage](#usage)
+  - [As a Python library](#as-a-python-library)
   - [CLI: one file](#cli-evaluate-one-csv)
   - [CLI: many files at once](#cli-evaluate-many-datasets-at-once)
-  - [As a Python library](#as-a-python-library)
   - [All CLI flags](#all-cli-flags)
 - [Validation against the paper](#validation-against-the-paper)
 - [Known limitations](#known-limitations)
@@ -57,63 +57,6 @@ That's it — you have an imbalance reading for the `temp` column (`N=721` becau
 The relevance function itself isn't reimplemented here — it comes from the [`ImbalancedLearningRegression`](https://pypi.org/project/ImbalancedLearningRegression/) (iblr) package, the Python port of the R `UBL` package the paper's authors used.
 
 ## Usage
-
-### CLI: evaluate one CSV
-
-Use this to check the imbalance of a single column in a single file.
-
-```bash
-python imbalance_eval.py path/to/data.csv --target column_name
-```
-
-**What happens, step by step:**
-
-1. The CSV is loaded.
-2. Missing values (if any) are filled in across all numeric columns.
-3. The `column_name` column is extracted.
-4. It's time-delay embedded with `k=10` by default — this uses each value's 10 preceding values to build the modeling table the paper trains on. Skip this with `--no-embed` to score the raw column instead.
-5. The relevance function runs, rare/normal cases are counted at the threshold (`0.9` by default).
-6. A one-row results table prints to your terminal.
-
-**A fuller example**, labeling the output and saving it to a file:
-
-```bash
-python imbalance_eval.py day.csv --target temp --date-col dteday \
-    --id DS1 --name Temperature --granularity Daily \
-    --threshold 0.9 --output results.csv
-```
-
-### CLI: evaluate many datasets at once
-
-Use this to build one combined table across several datasets or columns — like reproducing the paper's own Table 1.
-
-**Step 1 — write a manifest CSV** listing what to evaluate. Required columns: `id`, `name`, `path`, `target`. `granularity` is optional (blank if omitted) — it's just a display label, never used in the computation.
-
-```csv
-id,name,granularity,path,target
-DS1,Temperature,Daily,data/bike_day.csv,temp
-DS2,Humidity,Daily,data/bike_day.csv,hum
-DS3,Windspeed,Daily,data/bike_day.csv,windspeed
-DS4,Count,Daily,data/bike_day.csv,cnt
-```
-
-Rows sharing the same `path` are treated as one imputation batch — this matches the paper's approach of imputing correlated variables from the same source together (e.g. these four Bike Sharing columns) before splitting them into separate series.
-
-**Step 2 — run it:**
-
-```bash
-python imbalance_eval.py --config manifest.csv --threshold 0.9 --k 10 --output results.csv
-```
-
-**Step 3 — read the output**: one row per manifest entry, same columns as single-file mode.
-
-**Optional: per-dataset overrides.** Add `threshold` and/or `k` columns to override the global default for specific rows (leave blank to fall back to the CLI flag):
-
-```csv
-id,name,granularity,path,target,threshold
-DS1,Temperature,Daily,data/bike_day.csv,temp,0.9
-DS2,Humidity,Daily,data/bike_day.csv,hum,0.95
-```
 
 ### As a Python library
 
@@ -171,6 +114,63 @@ table = evaluate_csv_files(
 ```
 
 `id` defaults to each file's name (without extension) and `name` defaults to the target column name — pass `granularity="Daily"` if you want that column filled in, it's optional here too.
+
+### CLI: evaluate one CSV
+
+Use this to check the imbalance of a single column in a single file.
+
+```bash
+python imbalance_eval.py path/to/data.csv --target column_name
+```
+
+**What happens, step by step:**
+
+1. The CSV is loaded.
+2. Missing values (if any) are filled in across all numeric columns.
+3. The `column_name` column is extracted.
+4. It's time-delay embedded with `k=10` by default — this uses each value's 10 preceding values to build the modeling table the paper trains on. Skip this with `--no-embed` to score the raw column instead.
+5. The relevance function runs, rare/normal cases are counted at the threshold (`0.9` by default).
+6. A one-row results table prints to your terminal.
+
+**A fuller example**, labeling the output and saving it to a file:
+
+```bash
+python imbalance_eval.py day.csv --target temp --date-col dteday \
+    --id DS1 --name Temperature --granularity Daily \
+    --threshold 0.9 --output results.csv
+```
+
+### CLI: evaluate many datasets at once
+
+Use this to build one combined table across several datasets or columns — like reproducing the paper's own Table 1.
+
+**Step 1 — write a manifest CSV** listing what to evaluate. Required columns: `id`, `name`, `path`, `target`. `granularity` is optional (blank if omitted) — it's just a display label, never used in the computation.
+
+```csv
+id,name,granularity,path,target
+DS1,Temperature,Daily,data/bike_day.csv,temp
+DS2,Humidity,Daily,data/bike_day.csv,hum
+DS3,Windspeed,Daily,data/bike_day.csv,windspeed
+DS4,Count,Daily,data/bike_day.csv,cnt
+```
+
+Rows sharing the same `path` are treated as one imputation batch — this matches the paper's approach of imputing correlated variables from the same source together (e.g. these four Bike Sharing columns) before splitting them into separate series.
+
+**Step 2 — run it:**
+
+```bash
+python imbalance_eval.py --config manifest.csv --threshold 0.9 --k 10 --output results.csv
+```
+
+**Step 3 — read the output**: one row per manifest entry, same columns as single-file mode.
+
+**Optional: per-dataset overrides.** Add `threshold` and/or `k` columns to override the global default for specific rows (leave blank to fall back to the CLI flag):
+
+```csv
+id,name,granularity,path,target,threshold
+DS1,Temperature,Daily,data/bike_day.csv,temp,0.9
+DS2,Humidity,Daily,data/bike_day.csv,hum,0.95
+```
 
 ### All CLI flags
 
