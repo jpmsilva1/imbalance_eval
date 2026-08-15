@@ -87,7 +87,7 @@ python imbalance_eval.py day.csv --target temp --date-col dteday \
 
 Use this to build one combined table across several datasets or columns — like reproducing the paper's own Table 1.
 
-**Step 1 — write a manifest CSV** listing what to evaluate. Required columns: `id`, `name`, `granularity`, `path`, `target`.
+**Step 1 — write a manifest CSV** listing what to evaluate. Required columns: `id`, `name`, `path`, `target`. `granularity` is optional (blank if omitted) — it's just a display label, never used in the computation.
 
 ```csv
 id,name,granularity,path,target
@@ -138,6 +138,28 @@ print(table)
 ```
 
 Skip embedding to score raw values directly (`evaluate_datasets(datasets, rel_thres=0.9, embed=False)`) — this is also how to reproduce the paper's own Table 1 numbers; see [Validation against the paper](#validation-against-the-paper).
+
+**Evaluating several CSV files at once from Python** — `evaluate_csv_files` does the load-impute-evaluate loop for you, so you don't need to hand-build the `datasets` list above:
+
+```python
+from imbalance_eval import evaluate_csv_files
+
+table = evaluate_csv_files(
+    ["data/bike_day.csv", "data/bike_hour.csv"],
+    target="temp",       # same column name in every file...
+    k=10, rel_thres=0.9,
+)
+
+# ...or a {path: column} dict when the target column differs per file
+paths = ["data/bike_day.csv", "data/river_flow.csv"]
+table = evaluate_csv_files(
+    paths,
+    target={"data/bike_day.csv": "temp", "data/river_flow.csv": "flow"},
+    k=10, rel_thres=0.9,
+)
+```
+
+`id` defaults to each file's name (without extension) and `name` defaults to the target column name — pass `granularity="Daily"` if you want that column filled in, it's optional here too.
 
 ### All CLI flags
 
@@ -200,7 +222,8 @@ Everything lives in one file, `imbalance_eval.py`: library functions at the top 
 | `impute_dataframe(df, n_neighbors=5)` | Fills missing values via k-NN, jointly across numeric columns; leaves non-numeric columns untouched; no-ops if nothing's missing. |
 | `time_delay_embedding(series, k=10)` | Builds the `[y(t-k), ..., y(t-1), y(t)]` lag table the paper trains on. |
 | `compute_imbalance(y, rel_thres=0.9, ...)` | The core calculation: relevance scores in, `{N, n_normal, n_rare, IR, %Rare}` out. |
-| `evaluate_datasets(datasets, ...)` | Runs the full pipeline over a list of datasets, returns the summary table. |
+| `evaluate_datasets(datasets, ...)` | Runs the full pipeline over a list of `{id, name, series, granularity?}` dicts, returns the summary table. |
+| `evaluate_csv_files(paths, target, ...)` | Convenience wrapper for Python callers: loads + imputes each path and calls `evaluate_datasets` for you — no manifest file needed. |
 | `_run_single` / `_run_batch` / `main` | CLI wiring for the two modes above. |
 
 **One implementation detail worth knowing:** `ImbalancedLearningRegression` 0.0.2 calls a numpy keyword (`interpolation=`) that numpy 2.x removed. `_iblr_numpy_quantile_compat()` patches around it for the duration of that one call only, then restores numpy immediately — so importing this module never silently changes numpy's behavior elsewhere in your process (e.g. other cells in a notebook). Delete it once `iblr` ships a numpy-2-compatible release.

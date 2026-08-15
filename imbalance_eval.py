@@ -1,6 +1,7 @@
 import argparse
 import contextlib
 import csv
+import pathlib
 import sys
 
 import numpy as np
@@ -98,7 +99,7 @@ def evaluate_datasets(
             "ID": ds["id"],
             "Dataset": ds["name"],
             "N": stats["N"],
-            "Granularity": ds["granularity"],
+            "Granularity": ds.get("granularity", ""),
             "n_normal": stats["n_normal"],
             "n_rare": stats["n_rare"],
             "IR": stats["IR"],
@@ -143,7 +144,43 @@ def _get_target_series(df: pd.DataFrame, target: str, context: str) -> pd.Series
     return df[target]
 
 
-REQUIRED_MANIFEST_COLUMNS = {"id", "name", "granularity", "path", "target"}
+def evaluate_csv_files(
+    paths: list,
+    target,
+    date_col: str = None,
+    granularity: str = "",
+    k: int = 10,
+    rel_thres: float = 0.9,
+    embed: bool = True,
+    rel_xtrm_type: str = "both",
+    rel_coef: float = 1.5,
+) -> pd.DataFrame:
+    if isinstance(target, dict):
+        target_by_path = {str(p): col for p, col in target.items()}
+    else:
+        target_by_path = {str(p): target for p in paths}
+
+    datasets = []
+    for path in paths:
+        df = impute_dataframe(load_csv(path, date_col=date_col))
+        if str(path) not in target_by_path:
+            raise ValueError(f"no target column specified for path {path}; target dict is missing this key")
+        column = target_by_path[str(path)]
+        series = _get_target_series(df, column, path)
+        datasets.append({
+            "id": pathlib.Path(path).stem,
+            "name": column,
+            "granularity": granularity,
+            "series": series,
+        })
+
+    return evaluate_datasets(
+        datasets, k=k, rel_thres=rel_thres, embed=embed,
+        rel_xtrm_type=rel_xtrm_type, rel_coef=rel_coef,
+    )
+
+
+REQUIRED_MANIFEST_COLUMNS = {"id", "name", "path", "target"}
 
 
 def _evaluate_one(id_, name, granularity, series, k, rel_thres, args) -> pd.DataFrame:
@@ -182,7 +219,7 @@ def _run_batch(args) -> pd.DataFrame:
             threshold = float(row["threshold"]) if row.get("threshold") else args.threshold
             k = int(row["k"]) if row.get("k") else args.k
             series = _get_target_series(imputed, row["target"], f"{path} (manifest row {row['id']})")
-            results.append(_evaluate_one(row["id"], row["name"], row["granularity"], series, k, threshold, args))
+            results.append(_evaluate_one(row["id"], row["name"], row.get("granularity", ""), series, k, threshold, args))
 
     return pd.concat(results, ignore_index=True)
 

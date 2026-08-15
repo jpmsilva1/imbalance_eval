@@ -7,6 +7,7 @@ import pandas as pd
 
 from imbalance_eval import (
     compute_imbalance,
+    evaluate_csv_files,
     evaluate_datasets,
     impute_dataframe,
     load_csv,
@@ -128,6 +129,15 @@ def test_evaluate_datasets_embeds_and_matches_compute_imbalance():
     assert row["%Rare"] == expected["%Rare"]
 
 
+def test_evaluate_datasets_defaults_granularity_when_omitted():
+    series = pd.Series(list(range(45, 55)) * 5 + [100000] * 5)
+    datasets = [{"id": "DS1", "name": "Toy", "series": series}]  # no "granularity" key
+
+    result = evaluate_datasets(datasets, k=3, rel_thres=0.9)
+
+    assert result.iloc[0]["Granularity"] == ""
+
+
 def test_evaluate_datasets_can_skip_embedding():
     series = pd.Series(list(range(45, 55)) * 5 + [100000] * 5)
     datasets = [{"id": "DS1", "name": "Toy", "granularity": "Daily", "series": series}]
@@ -166,6 +176,62 @@ def _make_toy_data_csv(tmp_path):
     path = tmp_path / "data.csv"
     df.to_csv(path, index=False)
     return path
+
+
+def test_evaluate_csv_files_shared_target(tmp_path):
+    data_path = _make_toy_data_csv(tmp_path)
+
+    result = evaluate_csv_files([str(data_path)], target="temp", k=2, rel_thres=0.9)
+
+    assert result.iloc[0]["ID"] == data_path.stem
+    assert result.iloc[0]["Dataset"] == "temp"
+    assert result.iloc[0]["Granularity"] == ""
+    assert result.iloc[0]["n_rare"] > 0
+
+    raw = load_csv(data_path)
+    imputed = impute_dataframe(raw)
+    expected = evaluate_datasets(
+        [{"id": "x", "name": "x", "series": imputed["temp"]}], k=2, rel_thres=0.9
+    ).iloc[0]
+    assert result.iloc[0]["N"] == expected["N"]
+    assert result.iloc[0]["n_rare"] == expected["n_rare"]
+
+
+def test_evaluate_csv_files_per_path_target_override(tmp_path):
+    data_path = _make_toy_data_csv(tmp_path)
+
+    result = evaluate_csv_files([str(data_path)], target={str(data_path): "hum"}, k=2, rel_thres=0.9)
+
+    assert result.iloc[0]["Dataset"] == "hum"
+
+
+def test_evaluate_csv_files_passes_granularity_through(tmp_path):
+    data_path = _make_toy_data_csv(tmp_path)
+
+    result = evaluate_csv_files([str(data_path)], target="temp", granularity="Daily", k=2, rel_thres=0.9)
+
+    assert result.iloc[0]["Granularity"] == "Daily"
+
+
+def test_evaluate_csv_files_missing_target_dict_entry_gives_clear_error(tmp_path):
+    data_path = _make_toy_data_csv(tmp_path)
+
+    try:
+        evaluate_csv_files([str(data_path)], target={})
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert str(data_path) in str(e)
+
+
+def test_evaluate_csv_files_unknown_target_column_gives_clear_error(tmp_path):
+    data_path = _make_toy_data_csv(tmp_path)
+
+    try:
+        evaluate_csv_files([str(data_path)], target="nope")
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "nope" in str(e)
+        assert "temp" in str(e)
 
 
 def test_cli_single_file_mode(tmp_path):
@@ -244,11 +310,32 @@ def test_cli_single_file_unknown_target_column_gives_clear_error(tmp_path):
     assert "temp" in proc.stderr  # lists available columns
 
 
+def test_cli_batch_mode_without_granularity_column(tmp_path):
+    data_path = _make_toy_data_csv(tmp_path)
+    manifest_path = tmp_path / "manifest.csv"
+    manifest_path.write_text(
+        "id,name,path,target\n"
+        f"DS1,Temperature,{data_path},temp\n"
+    )
+    output_path = tmp_path / "results.csv"
+
+    proc = subprocess.run(
+        [sys.executable, "imbalance_eval.py", "--config", str(manifest_path),
+         "--k", "2", "--threshold", "0.9", "--output", str(output_path)],
+        cwd=REPO_ROOT,
+        capture_output=True, text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    result = pd.read_csv(output_path)
+    assert result.iloc[0]["Granularity"] == "" or pd.isna(result.iloc[0]["Granularity"])
+
+
 def test_cli_batch_missing_manifest_column_gives_clear_error(tmp_path):
     data_path = _make_toy_data_csv(tmp_path)
     manifest_path = tmp_path / "manifest.csv"
-    # missing the required "granularity" column
-    manifest_path.write_text(f"id,name,path,target\nDS1,Temp,{data_path},temp\n")
+    # missing the required "target" column
+    manifest_path.write_text(f"id,name,granularity,path\nDS1,Temp,Daily,{data_path}\n")
 
     proc = subprocess.run(
         [sys.executable, "imbalance_eval.py", "--config", str(manifest_path)],
@@ -257,4 +344,4 @@ def test_cli_batch_missing_manifest_column_gives_clear_error(tmp_path):
     )
 
     assert proc.returncode == 2
-    assert "granularity" in proc.stderr
+    assert "target" in proc.stderr
