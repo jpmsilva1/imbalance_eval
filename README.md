@@ -119,6 +119,17 @@ DS2,Humidity,Daily,data/bike_day.csv,hum,0.95
 
 Use this from a notebook or another script when you want the data in memory rather than piping through the CLI.
 
+**Install directly from GitHub** (e.g. in a Colab cell):
+
+```bash
+pip install git+https://github.com/jpmsilva1/imbalance_eval.git
+```
+
+```python
+import imbalance_eval
+print("imbalance_eval is ready to use!")
+```
+
 ```python
 from imbalance_eval import load_csv, impute_dataframe, evaluate_datasets
 
