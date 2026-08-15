@@ -17,6 +17,7 @@ DS1    temp 731        Daily       658      73  9.0  10.0
 
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
+- [How the code is organized](#how-the-code-is-organized)
 - [Usage](#usage)
   - [As a Python library](#as-a-python-library)
   - [CLI: one file](#cli-evaluate-one-csv)
@@ -24,7 +25,6 @@ DS1    temp 731        Daily       658      73  9.0  10.0
   - [All CLI flags](#all-cli-flags)
 - [Validation against the paper](#validation-against-the-paper)
 - [Known limitations](#known-limitations)
-- [How the code is organized](#how-the-code-is-organized)
 - [Running the tests](#running-the-tests)
 - [References](#references)
 
@@ -56,6 +56,22 @@ That's it — you have an imbalance reading for the `temp` column (`N=721` becau
 
 The relevance function itself isn't reimplemented here — it comes from the [`ImbalancedLearningRegression`](https://pypi.org/project/ImbalancedLearningRegression/) (iblr) package, the Python port of the R `UBL` package the paper's authors used.
 
+## How the code is organized
+
+Everything lives in one file, `imbalance_eval.py`: library functions at the top (usable standalone, e.g. from a notebook), a thin `argparse` CLI at the bottom.
+
+| Function | Role |
+|---|---|
+| `load_csv(path, date_col=None)` | Reads a CSV, optionally sorts by a date column and drops it. |
+| `impute_dataframe(df, n_neighbors=5)` | Fills missing values via k-NN, jointly across numeric columns; leaves non-numeric columns untouched; no-ops if nothing's missing. |
+| `time_delay_embedding(series, k=10)` | Builds the `[y(t-k), ..., y(t-1), y(t)]` lag table the paper trains on. |
+| `compute_imbalance(y, rel_thres=0.9, ...)` | The core calculation: relevance scores in, `{N, n_normal, n_rare, IR, %Rare}` out. |
+| `evaluate_datasets(datasets, ...)` | Runs the full pipeline over a list of `{id, name, series, granularity?}` dicts, returns the summary table. |
+| `evaluate_csv_files(paths, target, ...)` | Convenience wrapper for Python callers: loads + imputes each path and calls `evaluate_datasets` for you — no manifest file needed. |
+| `_run_single` / `_run_batch` / `main` | CLI wiring for the two modes above. |
+
+**One implementation detail worth knowing:** `ImbalancedLearningRegression` 0.0.2 calls a numpy keyword (`interpolation=`) that numpy 2.x removed. `_iblr_numpy_quantile_compat()` patches around it for the duration of that one call only, then restores numpy immediately — so importing this module never silently changes numpy's behavior elsewhere in your process (e.g. other cells in a notebook). Delete it once `iblr` ships a numpy-2-compatible release.
+
 ## Usage
 
 ### As a Python library
@@ -76,17 +92,27 @@ print("imbalance_eval is ready to use!")
 ```python
 from imbalance_eval import load_csv, impute_dataframe, evaluate_datasets
 
-# 1. Load and impute a raw multivariate CSV (correlated columns together)
+# 1. Load the CSV into a table (a pandas DataFrame), sorted by date.
+#    date_col="dteday" tells it which column is the date -- that column is
+#    used to sort the rows in time order, then dropped, since the date
+#    itself isn't part of what gets evaluated.
 raw = load_csv("day.csv", date_col="dteday")
+
+# 2. Fill in any missing values before evaluating. For each blank cell,
+#    this looks at the most similar *other rows* in the table (by their
+#    other column values) and fills the gap with their average. If there's
+#    no missing data, this is a no-op -- safe to always call.
 imputed = impute_dataframe(raw)
 
-# 2. List the columns you want evaluated
+# 3. Pick which column(s) you want evaluated. imputed["temp"] pulls out
+#    just the temperature column as a single time series; id/name/granularity
+#    are just labels for the output table, not used in the calculation.
 datasets = [
     {"id": "DS1", "name": "Temperature", "granularity": "Daily", "series": imputed["temp"]},
     {"id": "DS2", "name": "Humidity",    "granularity": "Daily", "series": imputed["hum"]},
 ]
 
-# 3. Evaluate -- returns a pandas DataFrame, one row per dataset
+# 4. Evaluate -- returns a pandas DataFrame, one row per dataset
 table = evaluate_datasets(datasets, k=10, rel_thres=0.9)
 print(table)
 ```
@@ -222,22 +248,6 @@ Still unresolved. The released `Exps.R` loads a pre-built `.Rdata` file with its
 - **No relevance bins or resampling** — this tool only *measures* imbalance; it doesn't implement the paper's actual resampling algorithms.
 - **No dataset auto-download** — bring your own CSVs.
 - **KNN imputation is O(n²)** in scikit-learn's default mode — fine at the paper's scale (largest dataset ~240k rows), worth knowing for much larger inputs with missing values.
-
-## How the code is organized
-
-Everything lives in one file, `imbalance_eval.py`: library functions at the top (usable standalone, e.g. from a notebook), a thin `argparse` CLI at the bottom.
-
-| Function | Role |
-|---|---|
-| `load_csv(path, date_col=None)` | Reads a CSV, optionally sorts by a date column and drops it. |
-| `impute_dataframe(df, n_neighbors=5)` | Fills missing values via k-NN, jointly across numeric columns; leaves non-numeric columns untouched; no-ops if nothing's missing. |
-| `time_delay_embedding(series, k=10)` | Builds the `[y(t-k), ..., y(t-1), y(t)]` lag table the paper trains on. |
-| `compute_imbalance(y, rel_thres=0.9, ...)` | The core calculation: relevance scores in, `{N, n_normal, n_rare, IR, %Rare}` out. |
-| `evaluate_datasets(datasets, ...)` | Runs the full pipeline over a list of `{id, name, series, granularity?}` dicts, returns the summary table. |
-| `evaluate_csv_files(paths, target, ...)` | Convenience wrapper for Python callers: loads + imputes each path and calls `evaluate_datasets` for you — no manifest file needed. |
-| `_run_single` / `_run_batch` / `main` | CLI wiring for the two modes above. |
-
-**One implementation detail worth knowing:** `ImbalancedLearningRegression` 0.0.2 calls a numpy keyword (`interpolation=`) that numpy 2.x removed. `_iblr_numpy_quantile_compat()` patches around it for the duration of that one call only, then restores numpy immediately — so importing this module never silently changes numpy's behavior elsewhere in your process (e.g. other cells in a notebook). Delete it once `iblr` ships a numpy-2-compatible release.
 
 ## Running the tests
 
