@@ -1,113 +1,81 @@
 # imbalance_eval
 
-A small CLI/library tool that measures **how imbalanced a time series dataset is**, using the same relevance-function approach as Moniz, Branco & Torgo (2017), *"Resampling Strategies for Imbalanced Time Series Forecasting"*.
+[![CI](https://github.com/jpmsilva1/imbalance_eval/actions/workflows/ci.yml/badge.svg)](https://github.com/jpmsilva1/imbalance_eval/actions/workflows/ci.yml)
 
-It answers one question: *"In this target variable, what fraction of values are 'rare' (unusually extreme), and how bad is the imbalance?"* — the same descriptive statistic the paper reports in its Table 1 (ID, N, Granularity, n_normal, n_rare, IR, %Rare) for each of its 24 datasets.
+A CLI and Python library that measures **how imbalanced a time series dataset is** — how many of its values are "rare" (unusually extreme) versus "normal."
 
----
+Point it at a CSV, and it gives you a table like this:
 
-## 1. The idea, in plain terms
+```
+ ID Dataset   N Granularity  n_normal  n_rare   IR  %Rare
+DS1    temp 731        Daily       658      73  9.0  10.0
+```
 
-1. Take a time series column (e.g. daily temperature, hourly rental counts).
-2. Fit a **relevance function** φ(y) that scores every value from 0 (totally normal) to 1 (totally rare/extreme), based on boxplot statistics (quartiles, IQR, whiskers) of that column's own distribution.
-3. Pick a **threshold** (default 0.9, matching the paper). Any value with φ(y) ≥ threshold counts as "rare."
-4. Report:
-   - **N** — total number of observations
-   - **n_normal / n_rare** — how many fall on each side of the threshold
-   - **IR** (imbalance ratio) — `n_normal / n_rare`
-   - **%Rare** — `100 * n_rare / N`
+`N` is the row count, `n_rare` is how many values were flagged extreme, `IR` (imbalance ratio) is `n_normal / n_rare`, and `%Rare` is the percentage of extreme values. This is the same descriptive statistic reported in Table 1 of Moniz, Branco & Torgo (2017), *"Resampling Strategies for Imbalanced Time Series Forecasting"* — this tool implements that paper's relevance-function methodology so you can run it on your own datasets.
 
-The relevance function itself (φ) is not reimplemented here — it comes straight from the `ImbalancedLearningRegression` (iblr) PyPI package, which is the Python port of the R `UBL` package the paper's authors used.
+## Contents
 
----
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Usage](#usage)
+  - [CLI: one file](#cli-evaluate-one-csv)
+  - [CLI: many files at once](#cli-evaluate-many-datasets-at-once)
+  - [As a Python library](#as-a-python-library)
+  - [All CLI flags](#all-cli-flags)
+- [Validation against the paper](#validation-against-the-paper)
+- [Known limitations](#known-limitations)
+- [How the code is organized](#how-the-code-is-organized)
+- [Running the tests](#running-the-tests)
+- [References](#references)
 
-## 2. How the code is organized
-
-Everything lives in one file, `imbalance_eval.py`. It has two layers:
-
-- **Library functions** (top of the file) — usable standalone from Python, e.g. in a notebook.
-- **CLI** (bottom of the file) — a thin `argparse` wrapper around the library, for running from the terminal.
-
-### Library functions, in the order data flows through them
-
-| Function | What it does |
-|---|---|
-| `load_csv(path, date_col=None)` | Reads a CSV. If you pass `date_col`, it parses that column as a date, sorts the rows chronologically by it, then drops it (so it doesn't get treated as a numeric feature downstream). |
-| `impute_dataframe(df, n_neighbors=5)` | Fills missing values using k-Nearest-Neighbors imputation (`sklearn.impute.KNNImputer`), run **jointly across all numeric columns** — matching the paper's design of imputing correlated variables together (e.g. temperature/humidity/windspeed from the same weather station) before splitting them into separate series. Non-numeric columns (like a leftover ID or label column) are left untouched. If there are no missing values, it's a no-op. |
-| `time_delay_embedding(series, k=10)` | Converts a single 1D time series into a **supervised regression table**: each row becomes `[y(t-k), ..., y(t-1), y(t)]`. This is what "time delay embedding" means — using the last *k* values to predict the next one. The paper uses k=10. Raises a clear error if `k` is too large for the series (would produce zero usable rows). |
-| `compute_imbalance(y, rel_thres=0.9, rel_xtrm_type="both", rel_coef=1.5)` | The core calculation. Calls `iblr.phi_ctrl_pts()` then `iblr.phi()` to get a relevance score for every value in `y`, counts how many clear the threshold, and returns a dict: `{N, n_normal, n_rare, IR, %Rare}`. |
-| `evaluate_datasets(datasets, k=10, rel_thres=0.9, embed=True, ...)` | Runs the whole pipeline over a **list** of datasets and returns one summary table (a pandas DataFrame) — this is what produces the paper-style Table 1 output. Each entry in `datasets` is a dict: `{"id": ..., "name": ..., "granularity": ..., "series": pd.Series}`. Set `embed=False` to skip step 3 and compute relevance directly on the raw series (useful for quick checks, or for reproducing the paper's own Table 1 numbers, which turn out to describe the *raw* series — see §5 below). |
-
-### CLI functions (wire the library up to the terminal)
-
-| Function | What it does |
-|---|---|
-| `_get_target_series(df, target, context)` | Looks up a column by name; raises a clear error (listing available columns) if it doesn't exist, instead of a cryptic `KeyError`. |
-| `_evaluate_one(...)` | Shared helper: wraps one dataset and calls `evaluate_datasets` — used by both CLI modes below so the wiring logic isn't duplicated. |
-| `_run_single(args)` | Handles single-file mode: load → impute → extract target column → evaluate. |
-| `_run_batch(args)` | Handles batch mode: reads a CSV manifest, validates it has all required columns, groups rows by source file (so each file is only imputed *once*, jointly across the columns it's used for), then evaluates every row. |
-| `main(argv=None)` | Parses arguments, decides single-file vs. batch mode, prints the results table, optionally saves it to CSV. |
-
-### The numpy compatibility shim
-
-`ImbalancedLearningRegression` 0.0.2 (the latest release on PyPI) calls `numpy.quantile(..., interpolation=...)` — a keyword argument that numpy renamed to `method=` and then removed entirely in numpy 2.x. Since this environment has numpy 2.5, that call would crash.
-
-`_iblr_numpy_quantile_compat()` is a small context manager that temporarily patches `numpy.quantile` to translate the old keyword to the new one, **only for the duration of the iblr call** inside `compute_imbalance` — not globally. It restores the original `numpy.quantile` immediately afterward, so importing this module never silently changes numpy's behavior for unrelated code elsewhere in the same process (e.g. other cells in a Jupyter notebook). This can be deleted once iblr ships a numpy-2-compatible release.
-
----
-
-## 3. Installation
+## Quick start
 
 ```bash
 pip install ImbalancedLearningRegression pandas numpy scikit-learn
 ```
 
-(`pandas`, `numpy`, and `scikit-learn` come in automatically as transitive dependencies of `ImbalancedLearningRegression`, so in practice `pip install ImbalancedLearningRegression` alone is usually enough.)
-
-To run the test suite, also install pytest:
+Then run it on any CSV — here using the [UCI Bike Sharing dataset](https://doi.org/10.24432/C5W894) as an example:
 
 ```bash
-pip install pytest
+python imbalance_eval.py day.csv --target temp --date-col dteday
 ```
 
----
+```
+ ID Dataset   N Granularity  n_normal  n_rare  IR  %Rare
+DS1    temp 721                   721       0 inf    0.0
+```
 
-## 4. Step-by-step: using it as a CLI
+That's it — you have an imbalance reading for the `temp` column (`N=721` because the default pipeline time-delay-embeds the 731-row series with a 10-step window first — see [How it works](#how-it-works)). Keep reading for batch mode (many datasets at once), using it as a library, and what each flag does.
 
-### 4a. Single-file mode — evaluate one CSV
+## How it works
 
-Use this when you have one CSV and want to check the imbalance of one column in it.
+1. Take a time series column (e.g. daily temperature, hourly rental counts).
+2. Fit a **relevance function** φ(y) that scores every value from 0 (totally normal) to 1 (totally extreme), based on that column's own boxplot statistics (quartiles, IQR, whiskers).
+3. Apply a **threshold** (default `0.9`, matching the paper). Any value with φ(y) ≥ threshold counts as "rare."
+4. Report `N`, `n_normal`, `n_rare`, `IR` (`n_normal / n_rare`), and `%Rare` (`100 * n_rare / N`).
+
+The relevance function itself isn't reimplemented here — it comes from the [`ImbalancedLearningRegression`](https://pypi.org/project/ImbalancedLearningRegression/) (iblr) package, the Python port of the R `UBL` package the paper's authors used.
+
+## Usage
+
+### CLI: evaluate one CSV
+
+Use this to check the imbalance of a single column in a single file.
 
 ```bash
 python imbalance_eval.py path/to/data.csv --target column_name
 ```
 
-**Step by step:**
+**What happens, step by step:**
 
-1. `data.csv` is loaded.
-2. Missing values (if any) are imputed across all numeric columns.
-3. The `column_name` column is extracted as the target series.
-4. It's time-delay embedded with the default `k=10` (skip this with `--no-embed`).
-5. The relevance function is computed and rare/normal cases are counted at the default threshold `0.9`.
-6. A one-row results table is printed.
+1. The CSV is loaded.
+2. Missing values (if any) are filled in across all numeric columns.
+3. The `column_name` column is extracted.
+4. It's time-delay embedded with `k=10` by default — this uses each value's 10 preceding values to build the modeling table the paper trains on. Skip this with `--no-embed` to score the raw column instead.
+5. The relevance function runs, rare/normal cases are counted at the threshold (`0.9` by default).
+6. A one-row results table prints to your terminal.
 
-**Useful flags:**
-
-| Flag | Default | Meaning |
-|---|---|---|
-| `--target` | *(required)* | Name of the column to evaluate |
-| `--threshold` | `0.9` | Relevance cutoff for "rare" (matches the paper) |
-| `--k` | `10` | Time delay embedding window size (matches the paper) |
-| `--no-embed` | off | Skip embedding, compute relevance on the raw column directly |
-| `--xtrm-type` | `both` | Which tail(s) of the distribution count as extreme: `both`, `high`, or `low` |
-| `--coef` | `1.5` | Boxplot whisker coefficient (standard Tukey value; the paper says "box plot statistics" without specifying this exactly — see §5) |
-| `--date-col` | *(none)* | If your CSV has a date column, pass its name here to sort chronologically and drop it before processing |
-| `--id` | `DS1` | Label for the "ID" column in the output |
-| `--name` | *(target name)* | Label for the "Dataset" column in the output |
-| `--granularity` | *(empty)* | Label for the "Granularity" column, e.g. `Daily`, `Hourly` |
-| `--output` | *(none)* | Also save the results table to this CSV path |
-
-**Example** — evaluating the daily temperature column from the UCI Bike Sharing dataset:
+**A fuller example**, labeling the output and saving it to a file:
 
 ```bash
 python imbalance_eval.py day.csv --target temp --date-col dteday \
@@ -115,11 +83,11 @@ python imbalance_eval.py day.csv --target temp --date-col dteday \
     --threshold 0.9 --output results.csv
 ```
 
-### 4b. Batch mode — evaluate many datasets at once (reproduces a Table-1-style summary)
+### CLI: evaluate many datasets at once
 
-Use this when you have several datasets (or several columns from the same file) and want one combined table, like the paper's Table 1.
+Use this to build one combined table across several datasets or columns — like reproducing the paper's own Table 1.
 
-**Step 1 — write a manifest CSV.** Required columns: `id`, `name`, `granularity`, `path`, `target`. Optional columns: `threshold`, `k` (per-row overrides — leave blank to use the global CLI flag).
+**Step 1 — write a manifest CSV** listing what to evaluate. Required columns: `id`, `name`, `granularity`, `path`, `target`.
 
 ```csv
 id,name,granularity,path,target
@@ -129,7 +97,7 @@ DS3,Windspeed,Daily,data/bike_day.csv,windspeed
 DS4,Count,Daily,data/bike_day.csv,cnt
 ```
 
-Rows that share the same `path` are imputed **once, jointly**, before their individual target columns are extracted — this matches how the paper treats correlated variables from the same source (e.g. four Bike Sharing columns share one imputation pass).
+Rows sharing the same `path` are treated as one imputation batch — this matches the paper's approach of imputing correlated variables from the same source together (e.g. these four Bike Sharing columns) before splitting them into separate series.
 
 **Step 2 — run it:**
 
@@ -137,9 +105,9 @@ Rows that share the same `path` are imputed **once, jointly**, before their indi
 python imbalance_eval.py --config manifest.csv --threshold 0.9 --k 10 --output results.csv
 ```
 
-**Step 3 — read the output**, a table with columns `ID, Dataset, N, Granularity, n_normal, n_rare, IR, %Rare` — one row per manifest entry.
+**Step 3 — read the output**: one row per manifest entry, same columns as single-file mode.
 
-**Per-row overrides:** add `threshold` and/or `k` columns to the manifest to override the global default for specific datasets:
+**Optional: per-dataset overrides.** Add `threshold` and/or `k` columns to override the global default for specific rows (leave blank to fall back to the CLI flag):
 
 ```csv
 id,name,granularity,path,target,threshold
@@ -147,28 +115,18 @@ DS1,Temperature,Daily,data/bike_day.csv,temp,0.9
 DS2,Humidity,Daily,data/bike_day.csv,hum,0.95
 ```
 
-### 4c. Error handling
+### As a Python library
 
-The CLI validates common mistakes and prints a clear one-line error (exit code 2) instead of crashing with a Python traceback:
-
-- Passing both a CSV path *and* `--config` at once
-- A `--target` (or manifest `target`) column that doesn't exist — the error lists the columns that *do* exist
-- A manifest CSV missing a required column (e.g. `granularity`)
-- A `--k` too large for the dataset's length
-
----
-
-## 5. Step-by-step: using it as a library (e.g. in a notebook)
+Use this from a notebook or another script when you want the data in memory rather than piping through the CLI.
 
 ```python
-import pandas as pd
 from imbalance_eval import load_csv, impute_dataframe, evaluate_datasets
 
-# 1. Load and impute a raw multivariate CSV (all correlated columns together)
+# 1. Load and impute a raw multivariate CSV (correlated columns together)
 raw = load_csv("day.csv", date_col="dteday")
 imputed = impute_dataframe(raw)
 
-# 2. Build a list of datasets -- one entry per target column you want evaluated
+# 2. List the columns you want evaluated
 datasets = [
     {"id": "DS1", "name": "Temperature", "granularity": "Daily", "series": imputed["temp"]},
     {"id": "DS2", "name": "Humidity",    "granularity": "Daily", "series": imputed["hum"]},
@@ -177,76 +135,91 @@ datasets = [
 # 3. Evaluate -- returns a pandas DataFrame, one row per dataset
 table = evaluate_datasets(datasets, k=10, rel_thres=0.9)
 print(table)
-
-# 4. Or skip embedding, to match the paper's own descriptive Table 1 numbers
-#    (see the note below -- Table 1's N values are the raw series length,
-#    not the post-embedding length)
-raw_table = evaluate_datasets(datasets, rel_thres=0.9, embed=False)
 ```
 
----
+Skip embedding to score raw values directly (`evaluate_datasets(datasets, rel_thres=0.9, embed=False)`) — this is also how to reproduce the paper's own Table 1 numbers; see [Validation against the paper](#validation-against-the-paper).
 
-## 6. Validation against the paper — what we found
+### All CLI flags
 
-Using the real UCI Bike Sharing dataset (the paper's DS1–DS8 source):
+| Flag | Default | Meaning |
+|---|---|---|
+| `--target` | *(required in single-file mode)* | Column to evaluate |
+| `--config` | *(none)* | Path to a batch manifest CSV (mutually exclusive with a positional CSV path) |
+| `--threshold` | `0.9` | Relevance cutoff for "rare" |
+| `--k` | `10` | Time delay embedding window size |
+| `--no-embed` | off | Skip embedding, score the raw column directly |
+| `--xtrm-type` | `both` | Which tail(s) count as extreme: `both`, `high`, or `low` |
+| `--coef` | `1.5` | Boxplot whisker coefficient (standard Tukey value) |
+| `--date-col` | *(none)* | Date column to sort by and drop before processing |
+| `--id` | `DS1` | Label for the output's "ID" column (single-file mode) |
+| `--name` | *(target name)* | Label for the output's "Dataset" column (single-file mode) |
+| `--granularity` | *(empty)* | Label for the output's "Granularity" column, e.g. `Daily` (single-file mode) |
+| `--output` | *(none)* | Also save the results table to this CSV path |
 
-- **N matches exactly.** The paper's Table 1 lists DS1 (daily temperature) as having "731 values" — this is the *raw* series length, not the post-embedding length (which would be 731 − k = 721). This tells us Table 1's descriptive statistics characterize the raw series, **before** time delay embedding — so use `embed=False` when trying to reproduce Table 1 numbers directly.
-- **%Rare does not match at the default coefficient.** At `rel_coef=1.5` (the standard Tukey boxplot coefficient, and iblr's default), the daily temperature column has zero values outside the boxplot whiskers, giving `%Rare = 0.0`, versus the paper's reported `9.9%`. The temperature distribution isn't even skewed (skew ≈ −0.05), so this isn't a "standard vs. adjusted/medcouple boxplot" issue — skew-adjustment barely changes anything for a near-symmetric distribution. Sweeping `--coef` shows smaller values recover numbers in the paper's range (e.g. `coef=0.6` gives ~10.3%), but there's no principled way to know the paper's exact original coefficient without their source code, so this isn't hardcoded as a new default — `--coef` is exposed precisely so you can tune it once you have more datasets or the original script to cross-check against.
+Common mistakes are caught with a clear one-line error instead of a Python traceback: passing a CSV path *and* `--config` together, a `--target`/manifest column that doesn't exist (the error lists the columns that do), a manifest missing a required column, or a `--k` too large for the dataset.
 
-### Investigated and ruled out: first-order differencing
+## Validation against the paper
 
-A prior review of this repo claimed the paper applied first-order differencing (`Δy_t = y_t - y_{t-1}`) before computing Table 1's statistics, and that this exactly reproduces the published `%Rare` values. This was checked against primary sources and does not hold up:
+Checked against the real [UCI Bike Sharing dataset](https://doi.org/10.24432/C5W894) (the paper's DS1–DS8 source):
 
-- The full extracted text of the paper PDF contains no description of a differencing/detrending preprocessing step (searched "differenc", "delta", "stationar", "detrend" — only found unrelated descriptive language like "non-stationary characteristics of data portray a hard setting").
-- The paper's own released R code (`github.com/nunompmoniz/TSResampStrat_JDSA2017`, `Exps.R`) contains no `diff(` call anywhere in its 2,558 lines. Its embedding step (`create.data()`) is a direct call to R's `embed()`, nothing else.
-- Empirically, differencing the real UCI Bike Sharing `temp` column changes `N` from 731 to 730 (differencing always drops one row), but Table 1 explicitly states `N=731` for DS1. A hypothesis that must contradict one of the two numbers it's trying to explain isn't a valid explanation, even though the resulting `%Rare` (~10.0%) happens to land close to the paper's 9.9%.
+- ✅ **`N` matches exactly.** The paper's Table 1 lists DS1 as having "731 values" — the *raw* series length, before embedding (which would leave 731 − 10 = 721). Table 1's numbers describe the raw series, so use `--no-embed` / `embed=False` when comparing against it.
+- ⚠️ **`%Rare` doesn't match at the default coefficient.** At `--coef 1.5` (the standard Tukey value), the daily temperature column has zero boxplot outliers, giving `%Rare=0.0` versus the paper's `9.9%`. The distribution isn't skewed either (skew ≈ −0.05), so this isn't an adjusted-vs-standard-boxplot issue. Smaller `--coef` values land closer to the paper's range (e.g. `coef=0.6` → ~10.3%), but there's no principled way to know the paper's exact original value without their source — `--coef` is exposed so you can tune it once you have more datasets to cross-check against.
 
-**Do not add a `--diff` flag or any differencing step based on this claim.** If a future contributor or agent proposes it again, this note and the evidence above should be the first thing checked before acting on it.
+<details>
+<summary><b>Ruled out: first-order differencing wasn't the missing step</b></summary>
 
-### Open question: exact preprocessing to reproduce Table 1's %Rare
+A prior review claimed the paper differenced the data (`Δy_t = y_t − y_{t-1}`) before computing Table 1, and that this reproduces the published numbers exactly. Checked against primary sources, this doesn't hold up:
 
-The exact preprocessing pipeline needed to reproduce Table 1's `%Rare` values precisely is still unknown. The released `Exps.R` loads a pre-built `Data/data_NM_PB_LT_DSAA2016.Rdata` file and has its `knnImputation()` call commented out — meaning any imputation happened upstream, in a script not included in the public repo, and we cannot verify from available materials whether it ran before or after embedding. The paper's own prose (§4.1) describes imputation preceding embedding, which matches what this tool already does — but this has not been cross-checked against the actual `.Rdata` file, which isn't publicly available. Treat exact Table 1 replication as unresolved, not solved.
+- The full paper text has no mention of differencing/detrending as a preprocessing step (searched "differenc", "delta", "stationar", "detrend" — only unrelated descriptive language).
+- The paper authors' own released R code ([`TSResampStrat_JDSA2017`](https://github.com/nunompmoniz/TSResampStrat_JDSA2017), `Exps.R`, 2,558 lines) contains no `diff(` call anywhere.
+- Empirically: differencing the real `temp` column changes `N` from 731 to 730 (differencing always drops a row), but Table 1 states `N=731`. A fix that contradicts one of the two numbers it's explaining isn't a real fix — even though the resulting `%Rare` (~10.0%) happens to land close to 9.9%.
 
----
+**Don't add a `--diff` flag based on this.** If it comes up again, this note is the first thing to check.
+</details>
 
-## 7. Running the tests
+<details>
+<summary><b>Open question: the exact preprocessing behind Table 1's numbers</b></summary>
+
+Still unresolved. The released `Exps.R` loads a pre-built `.Rdata` file with its `knnImputation()` call commented out — meaning real imputation happened upstream, in a script that isn't public, so whether it ran before or after embedding can't be verified. The paper's prose describes imputation before embedding, matching what this tool does, but that hasn't been cross-checked against the actual data.
+</details>
+
+## Known limitations
+
+- **No manual relevance control points** — the paper's method is always automatic (boxplot-derived), so `iblr`'s `method="manual"` option isn't wired up. Adding it later is a small, isolated change.
+- **No relevance bins or resampling** — this tool only *measures* imbalance; it doesn't implement the paper's actual resampling algorithms.
+- **No dataset auto-download** — bring your own CSVs.
+- **KNN imputation is O(n²)** in scikit-learn's default mode — fine at the paper's scale (largest dataset ~240k rows), worth knowing for much larger inputs with missing values.
+
+## How the code is organized
+
+Everything lives in one file, `imbalance_eval.py`: library functions at the top (usable standalone, e.g. from a notebook), a thin `argparse` CLI at the bottom.
+
+| Function | Role |
+|---|---|
+| `load_csv(path, date_col=None)` | Reads a CSV, optionally sorts by a date column and drops it. |
+| `impute_dataframe(df, n_neighbors=5)` | Fills missing values via k-NN, jointly across numeric columns; leaves non-numeric columns untouched; no-ops if nothing's missing. |
+| `time_delay_embedding(series, k=10)` | Builds the `[y(t-k), ..., y(t-1), y(t)]` lag table the paper trains on. |
+| `compute_imbalance(y, rel_thres=0.9, ...)` | The core calculation: relevance scores in, `{N, n_normal, n_rare, IR, %Rare}` out. |
+| `evaluate_datasets(datasets, ...)` | Runs the full pipeline over a list of datasets, returns the summary table. |
+| `_run_single` / `_run_batch` / `main` | CLI wiring for the two modes above. |
+
+**One implementation detail worth knowing:** `ImbalancedLearningRegression` 0.0.2 calls a numpy keyword (`interpolation=`) that numpy 2.x removed. `_iblr_numpy_quantile_compat()` patches around it for the duration of that one call only, then restores numpy immediately — so importing this module never silently changes numpy's behavior elsewhere in your process (e.g. other cells in a notebook). Delete it once `iblr` ships a numpy-2-compatible release.
+
+## Running the tests
 
 ```bash
-pip install pytest
+pip install -e ".[dev]"
 pytest test_imbalance_eval.py -v
 ```
 
-15 tests cover: time delay embedding correctness, relevance/imbalance counting (including edge cases — uniform distributions with zero rare cases, and the infinite-IR case), imputation (including the non-numeric-column-preservation fix), the full CLI in both modes (via subprocess, checking real stdout/exit codes), and the input-validation error paths.
+15 tests: embedding correctness, relevance/imbalance counting (including edge cases like uniform distributions and infinite IR), imputation, both CLI modes end-to-end via subprocess, and the input-validation error paths.
 
----
+## References
 
-## 8. Known limitations / deliberately out of scope
+**Paper this tool implements:** Moniz, N., Branco, P., & Torgo, L. (2017). Resampling strategies for imbalanced time series forecasting. *International Journal of Data Science and Analytics*, 3(3), 161–181. https://doi.org/10.1007/s41060-017-0044-3
 
-- **Manual relevance control points** (`iblr`'s `method="manual"` option) aren't wired up — the paper's own method is always automatic (boxplot-derived), so this wasn't needed. `rel_xtrm_type`/`rel_coef` stay as pass-through parameters, so adding manual mode later is a small addition, not a rework.
-- **Relevance bins** (grouping temporally-contiguous rare/normal observations, used for the paper's actual *resampling* algorithms) are not implemented — this tool only measures imbalance, it doesn't resample.
-- **No dataset auto-download.** You bring your own CSVs; fetching reference datasets (like UCI Bike Sharing) for validation is a manual step, not a CLI feature.
-- **KNN imputation is O(n²)** in sklearn's default brute-force mode — fine at the paper's scale (largest dataset ~240k rows), but worth knowing if you point this at something much larger and it happens to have missing values.
+**Paper authors' original R code** (used to fact-check preprocessing claims above): https://github.com/nunompmoniz/TSResampStrat_JDSA2017
 
----
+**Relevance function library:** Branco, P. et al. *ImbalancedLearningRegression* [Python package]. https://pypi.org/project/ImbalancedLearningRegression/ — its `phi()`/`phi_ctrl_pts()` port the method from Ribeiro, R. P. (2011). *Utility-based regression* (PhD dissertation), University of Porto.
 
-## 9. References
-
-**Paper this tool implements the relevance-function methodology from:**
-
-Moniz, N., Branco, P., & Torgo, L. (2017). Resampling strategies for imbalanced time series forecasting. *International Journal of Data Science and Analytics*, 3(3), 161–181. https://doi.org/10.1007/s41060-017-0044-3
-
-**Original R code released by the paper's authors** (used to fact-check preprocessing claims in §6):
-
-https://github.com/nunompmoniz/TSResampStrat_JDSA2017
-
-**Library used for the relevance function (φ) itself:**
-
-Branco, P. (ImbalancedLearningRegression contributors). *ImbalancedLearningRegression* [Python package]. PyPI: https://pypi.org/project/ImbalancedLearningRegression/ — GitHub: https://github.com/paobranco/ImbalancedLearningRegression
-
-The `phi()`/`phi_ctrl_pts()` relevance-function implementation in that package is itself a Python port of the R `UBL` package's method, based on:
-
-Ribeiro, R. P. (2011). *Utility-based regression* (PhD dissertation). Department of Computer Science, Faculty of Sciences, University of Porto.
-
-**Validation dataset used in §6:**
-
-Fanaee-T, H. (2013). Bike Sharing [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5W894 (CC BY 4.0)
+**Validation dataset:** Fanaee-T, H. (2013). Bike Sharing [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5W894 (CC BY 4.0)
