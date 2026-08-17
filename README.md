@@ -56,6 +56,8 @@ That's it — you have an imbalance reading for the `temp` column (`N=721` becau
 
 The relevance function itself isn't reimplemented here — it comes from the [`ImbalancedLearningRegression`](https://pypi.org/project/ImbalancedLearningRegression/) (iblr) package, the Python port of the R `UBL` package the paper's authors used.
 
+The boxplot in step 2 is the **standard (Tukey) boxplot** — not the skew-adjusted variant (Hubert & Vandervieren, 2008) — matching the paper. Both the paper's method (Ribeiro's 2011 thesis → R `UBL`) and `iblr`'s `box_plot_stats()` compute whiskers the classic way: `Q1 - coef*IQR` / `Q3 + coef*IQR` with `coef=1.5` by default, no skew correction.
+
 ## How the code is organized
 
 Everything lives in one file, `imbalance_eval.py`: library functions at the top (usable standalone, e.g. from a notebook), a thin `argparse` CLI at the bottom.
