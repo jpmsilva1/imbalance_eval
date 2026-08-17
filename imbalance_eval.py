@@ -54,11 +54,16 @@ def time_delay_embedding(series: pd.Series, k: int = 10) -> pd.DataFrame:
 
 
 def compute_imbalance(
-    y: pd.Series,
+    y,  # pd.Series, or anything pd.Series() accepts (list, ndarray)
     rel_thres: float = 0.9,
     rel_xtrm_type: str = "both",
     rel_coef: float = 1.5,
 ) -> dict:
+    y = pd.Series(y)  # iblr's phi() calls .reset_index(); accept arrays/lists too
+    if len(y) < 2:
+        # A scalar coerces to a length-1 Series, which would otherwise report a
+        # straight-faced {N: 1, n_rare: 0, IR: inf} instead of failing.
+        raise ValueError(f"compute_imbalance: need at least 2 values, got {len(y)}")
     with _iblr_numpy_quantile_compat():
         ctrl_pts = iblr.phi_ctrl_pts(y, method="auto", xtrm_type=rel_xtrm_type, coef=rel_coef)
         phi_values = iblr.phi(y, ctrl_pts)

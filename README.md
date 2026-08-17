@@ -18,6 +18,7 @@ DS1    temp 731        Daily       658      73  9.0  10.0
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [How the code is organized](#how-the-code-is-organized)
+- [Using it on non-time-series data](#using-it-on-non-time-series-data)
 - [Usage](#usage)
   - [As a Python library](#as-a-python-library)
   - [CLI: one file](#cli-evaluate-one-csv)
@@ -73,6 +74,36 @@ Everything lives in one file, `imbalance_eval.py`: library functions at the top 
 | `_run_single` / `_run_batch` / `main` | CLI wiring for the two modes above. |
 
 **One implementation detail worth knowing:** `ImbalancedLearningRegression` 0.0.2 calls a numpy keyword (`interpolation=`) that numpy 2.x removed. `_iblr_numpy_quantile_compat()` patches around it for the duration of that one call only, then restores numpy immediately — so importing this module never silently changes numpy's behavior elsewhere in your process (e.g. other cells in a notebook). Delete it once `iblr` ships a numpy-2-compatible release.
+
+## Using it on non-time-series data
+
+The relevance function doesn't know what a timestamp is. `compute_imbalance()` scores *any* numeric target — insurance claim amounts, manufacturing yields, churn revenue — with no date column and no lag window:
+
+```python
+import pandas as pd
+from imbalance_eval import compute_imbalance
+
+claims = pd.read_csv("claims.csv")["claim_amount"]
+print(compute_imbalance(claims))
+```
+
+You get back the same `{N, n_normal, n_rare, IR, %Rare}` dict the time-series path produces. A plain list or numpy array works too — it's converted internally.
+
+**If you use the higher-level helpers on tabular data, pass `embed=False`.** `evaluate_datasets()` and `evaluate_csv_files()` default to `embed=True`, which time-delay-embeds the column first — that's correct for a time series and wrong for unordered rows. It silently drops `k` rows (10 by default) and shifts every statistic:
+
+```python
+ds = [{"id": "T1", "name": "claims", "series": claims}]   # 500 rows
+
+evaluate_datasets(ds)                # N=490 -- 10 rows lost to embedding
+evaluate_datasets(ds, embed=False)   # N=500 -- what you want for tabular data
+```
+
+On the CLI that flag is `--no-embed`.
+
+Two caveats worth knowing before you trust the number:
+
+- **A roughly symmetric target will report few or no rare cases** at the default `--coef 1.5`, since it has no values beyond the Tukey whiskers. This is the same effect documented in [Validation against the paper](#validation-against-the-paper) — tune `--coef` there if your target isn't skewed.
+- **This use case isn't validated here.** The DS1–DS8 check in [Validation against the paper](#validation-against-the-paper) validates the *time-series pipeline*. The relevance function itself comes from `iblr` and is used as-is; this project doesn't re-validate it against a tabular regression benchmark.
 
 ## Usage
 

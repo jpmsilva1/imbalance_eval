@@ -67,6 +67,27 @@ def test_compute_imbalance_detects_outliers_as_rare():
     assert stats["%Rare"] == round(100 * stats["n_rare"] / stats["N"], 2)
 
 
+def test_compute_imbalance_accepts_arrays_and_lists():
+    # iblr's phi() calls y.reset_index(), so raw numpy arrays and lists would
+    # otherwise fail with a confusing AttributeError from inside the dependency.
+    values = list(range(45, 55)) * 95 + [100000] * 50
+    expected = compute_imbalance(pd.Series(values))
+
+    assert compute_imbalance(np.array(values)) == expected
+    assert compute_imbalance(values) == expected
+
+
+def test_compute_imbalance_rejects_degenerate_input():
+    # pd.Series(5.0) is a valid length-1 Series, so without a guard a scalar
+    # would report {N: 1, n_rare: 0, IR: inf} rather than failing.
+    for bad in (5.0, [], [42.0]):
+        try:
+            compute_imbalance(bad)
+            assert False, f"expected ValueError for {bad!r}"
+        except ValueError as e:
+            assert "at least 2 values" in str(e)
+
+
 def test_impute_dataframe_fills_nan_and_preserves_present_values():
     df = pd.DataFrame({
         "a": [1, 2, 3, 4, 5],
