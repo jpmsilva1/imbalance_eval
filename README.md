@@ -63,15 +63,16 @@ The boxplot in step 2 is the **standard (Tukey) boxplot** — not the skew-adjus
 
 Everything lives in one file, `imbalance_eval.py`: library functions at the top (usable standalone, e.g. from a notebook), a thin `argparse` CLI at the bottom.
 
-| Function | Role |
-|---|---|
-| `load_csv(path, date_col=None)` | Reads a CSV, optionally sorts by a date column and drops it. |
-| `impute_dataframe(df, n_neighbors=5)` | Fills missing values via k-NN, jointly across numeric columns; leaves non-numeric columns untouched; no-ops if nothing's missing. |
-| `time_delay_embedding(series, k=10)` | Builds the `[y(t-k), ..., y(t-1), y(t)]` lag table the paper trains on. |
-| `compute_imbalance(y, rel_thres=0.9, ...)` | The core calculation: relevance scores in, `{N, n_normal, n_rare, IR, %Rare}` out. |
-| `evaluate_datasets(datasets, ...)` | Runs the full pipeline over a list of `{id, name, series, granularity?}` dicts, returns the summary table. |
-| `evaluate_csv_files(paths, target, ...)` | Convenience wrapper for Python callers: loads + imputes each path and calls `evaluate_datasets` for you — no manifest file needed. |
-| `_run_single` / `_run_batch` / `main` | CLI wiring for the two modes above. |
+These are the six functions meant to be called directly (the public interface); everything else in the file (`_iblr_numpy_quantile_compat`, `_get_target_series`, `_run_single`, `_run_batch`, `_build_arg_parser`, `_evaluate_one`, `main`) is internal wiring for the CLI, named with a leading underscore.
+
+| Function | Signature | Returns | Role |
+|---|---|---|---|
+| `load_csv` | `load_csv(path, date_col: str = None)` | `pd.DataFrame` | Reads a CSV. If `date_col` is given, sorts rows by it and drops the column — pass `None` (the default) to skip both. |
+| `impute_dataframe` | `impute_dataframe(df: pd.DataFrame, n_neighbors: int = 5)` | `pd.DataFrame` | Fills missing values via k-NN, jointly across numeric columns; leaves non-numeric columns untouched; no-ops (returns `df` unchanged) if nothing's missing. |
+| `time_delay_embedding` | `time_delay_embedding(series: pd.Series, k: int = 10)` | `pd.DataFrame` | Builds the `[lag_k, ..., lag_1, target]` lag table the paper trains on. Raises `ValueError` if `k` is too large for `series` to produce any rows. |
+| `compute_imbalance` | `compute_imbalance(y, rel_thres: float = 0.9, rel_xtrm_type: str = "both", rel_coef: float = 1.5)` | `dict` — `{N, n_normal, n_rare, IR, %Rare}` | The core calculation: relevance scores in (via the `iblr` boxplot relevance function), imbalance stats out. `y` accepts a `pd.Series`, list, or array. Raises `ValueError` if `y` has fewer than 2 values. Warns if every relevance score is 0 (no boxplot outliers at this `rel_coef` — see [Validation against the paper](#validation-against-the-paper)). |
+| `evaluate_datasets` | `evaluate_datasets(datasets: list, k: int = 10, rel_thres: float = 0.9, embed: bool = True, rel_xtrm_type: str = "both", rel_coef: float = 1.5, diff: bool = False)` | `pd.DataFrame` — one row per dataset | Runs the full pipeline over a list of `{id, name, series, granularity?}` dicts. `diff=True` first-order differences each series before `embed` runs; `embed=False` skips time-delay embedding and scores the raw (or differenced) series directly. |
+| `evaluate_csv_files` | `evaluate_csv_files(paths: list, target, date_col: str = None, granularity: str = "", k: int = 10, rel_thres: float = 0.9, embed: bool = True, rel_xtrm_type: str = "both", rel_coef: float = 1.5, diff: bool = False)` | `pd.DataFrame` — one row per path | Convenience wrapper for Python callers: loads + imputes each path and calls `evaluate_datasets` for you — no manifest file needed. `target` is either one column name shared by every path, or a `{path: column}` dict for per-file overrides. |
 
 **One implementation detail worth knowing:** `ImbalancedLearningRegression` 0.0.2 calls a numpy keyword (`interpolation=`) that numpy 2.x removed. `_iblr_numpy_quantile_compat()` patches around it for the duration of that one call only, then restores numpy immediately — so importing this module never silently changes numpy's behavior elsewhere in your process (e.g. other cells in a notebook). Delete it once `iblr` ships a numpy-2-compatible release.
 
