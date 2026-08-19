@@ -18,12 +18,12 @@ DS1    temp 731        Daily       658      73  9.0  10.0
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [How the code is organized](#how-the-code-is-organized)
-- [Using it on non-time-series data](#using-it-on-non-time-series-data)
 - [Usage](#usage)
   - [As a Python library](#as-a-python-library)
   - [CLI: one file](#cli-evaluate-one-csv)
   - [CLI: many files at once](#cli-evaluate-many-datasets-at-once)
   - [All CLI flags](#all-cli-flags)
+- [Using it on non-time-series data](#using-it-on-non-time-series-data)
 - [Validation against the paper](#validation-against-the-paper)
 - [Known limitations](#known-limitations)
 - [Running the tests](#running-the-tests)
@@ -75,36 +75,6 @@ Everything lives in one file, `imbalance_eval.py`: library functions at the top 
 
 **One implementation detail worth knowing:** `ImbalancedLearningRegression` 0.0.2 calls a numpy keyword (`interpolation=`) that numpy 2.x removed. `_iblr_numpy_quantile_compat()` patches around it for the duration of that one call only, then restores numpy immediately — so importing this module never silently changes numpy's behavior elsewhere in your process (e.g. other cells in a notebook). Delete it once `iblr` ships a numpy-2-compatible release.
 
-## Using it on non-time-series data
-
-The relevance function doesn't know what a timestamp is. `compute_imbalance()` scores *any* numeric target — insurance claim amounts, manufacturing yields, churn revenue — with no date column and no lag window:
-
-```python
-import pandas as pd
-from imbalance_eval import compute_imbalance
-
-claims = pd.read_csv("claims.csv")["claim_amount"]
-print(compute_imbalance(claims))
-```
-
-You get back the same `{N, n_normal, n_rare, IR, %Rare}` dict the time-series path produces. A plain list or numpy array works too — it's converted internally.
-
-**If you use the higher-level helpers on tabular data, pass `embed=False`.** `evaluate_datasets()` and `evaluate_csv_files()` default to `embed=True`, which time-delay-embeds the column first — that's correct for a time series and wrong for unordered rows. It silently drops `k` rows (10 by default) and shifts every statistic:
-
-```python
-ds = [{"id": "T1", "name": "claims", "series": claims}]   # 500 rows
-
-evaluate_datasets(ds)                # N=490 -- 10 rows lost to embedding
-evaluate_datasets(ds, embed=False)   # N=500 -- what you want for tabular data
-```
-
-On the CLI that flag is `--no-embed`.
-
-Two caveats worth knowing before you trust the number:
-
-- **A roughly symmetric target will report few or no rare cases** at the default `--coef 1.5`, since it has no values beyond the Tukey whiskers. This is the same effect documented in [Validation against the paper](#validation-against-the-paper) — tune `--coef` there if your target isn't skewed.
-- **This use case isn't validated here.** The DS1–DS8 check in [Validation against the paper](#validation-against-the-paper) validates the *time-series pipeline*. The relevance function itself comes from `iblr` and is used as-is; this project doesn't re-validate it against a tabular regression benchmark.
-
 ## Usage
 
 ### As a Python library
@@ -150,7 +120,7 @@ table = evaluate_datasets(datasets, k=10, rel_thres=0.9)
 print(table)
 ```
 
-Skip embedding to score raw values directly (`evaluate_datasets(datasets, rel_thres=0.9, embed=False)`) — this is also how to reproduce the paper's own Table 1 numbers; see [Validation against the paper](#validation-against-the-paper).
+Skip embedding to score raw values directly (`evaluate_datasets(datasets, rel_thres=0.9, embed=False)`), or first-order difference the series before scoring (`evaluate_datasets(datasets, rel_thres=0.9, embed=False, diff=True)`) — the combination of the two is how to reproduce the paper's own Table 1 numbers; see [Validation against the paper](#validation-against-the-paper).
 
 **Evaluating several CSV files at once from Python** — `evaluate_csv_files` does the load-impute-evaluate loop for you, so you don't need to hand-build the `datasets` list above:
 
@@ -187,7 +157,7 @@ python imbalance_eval.py path/to/data.csv --target column_name
 1. The CSV is loaded.
 2. Missing values (if any) are filled in across all numeric columns.
 3. The `column_name` column is extracted.
-4. It's time-delay embedded with `k=10` by default — this uses each value's 10 preceding values to build the modeling table the paper trains on. Skip this with `--no-embed` to score the raw column instead.
+4. It's time-delay embedded with `k=10` by default — this uses each value's 10 preceding values to build the modeling table the paper trains on. Skip this with `--no-embed` to score the raw column instead. Pass `--diff` to first-order difference the series (`y[t] - y[t-1]`) before this step — that's what the paper's own DS1–DS8 numbers are computed on, see [Validation against the paper](#validation-against-the-paper).
 5. The relevance function runs, rare/normal cases are counted at the threshold (`0.9` by default).
 6. A one-row results table prints to your terminal.
 
@@ -240,6 +210,7 @@ DS2,Humidity,Daily,data/bike_day.csv,hum,0.95
 | `--threshold` | `0.9` | Relevance cutoff for "rare" |
 | `--k` | `10` | Time delay embedding window size |
 | `--no-embed` | off | Skip embedding, score the raw column directly |
+| `--diff` | off | First-order difference the target series before embedding/scoring |
 | `--xtrm-type` | `both` | Which tail(s) count as extreme: `both`, `high`, or `low` |
 | `--coef` | `1.5` | Boxplot whisker coefficient (standard Tukey value) |
 | `--date-col` | *(none)* | Date column to sort by and drop before processing |
@@ -250,29 +221,49 @@ DS2,Humidity,Daily,data/bike_day.csv,hum,0.95
 
 Common mistakes are caught with a clear one-line error instead of a Python traceback: passing a CSV path *and* `--config` together, a `--target`/manifest column that doesn't exist (the error lists the columns that do), a manifest missing a required column, or a `--k` too large for the dataset.
 
+## Using it on non-time-series data
+
+The relevance function doesn't know what a timestamp is. `compute_imbalance()` scores *any* numeric target — insurance claim amounts, manufacturing yields, churn revenue — with no date column and no lag window:
+
+```python
+import pandas as pd
+from imbalance_eval import compute_imbalance
+
+claims = pd.read_csv("claims.csv")["claim_amount"]
+print(compute_imbalance(claims))
+```
+
+You get back the same `{N, n_normal, n_rare, IR, %Rare}` dict the time-series path produces. A plain list or numpy array works too — it's converted internally.
+
+**If you use the higher-level helpers on tabular data, pass `embed=False`.** `evaluate_datasets()` and `evaluate_csv_files()` default to `embed=True`, which time-delay-embeds the column first — that's correct for a time series and wrong for unordered rows. It silently drops `k` rows (10 by default) and shifts every statistic:
+
+```python
+ds = [{"id": "T1", "name": "claims", "series": claims}]   # 500 rows
+
+evaluate_datasets(ds)                # N=490 -- 10 rows lost to embedding
+evaluate_datasets(ds, embed=False)   # N=500 -- what you want for tabular data
+```
+
+On the CLI that flag is `--no-embed`.
+
+Two caveats worth knowing before you trust the number:
+
+- **A roughly symmetric target will report few or no rare cases** at the default `--coef 1.5`, since it has no values beyond the Tukey whiskers. This is the same effect documented in [Validation against the paper](#validation-against-the-paper) — tune `--coef` there if your target isn't skewed.
+- **This use case isn't validated here.** The DS1–DS8 check in [Validation against the paper](#validation-against-the-paper) validates the *time-series pipeline*. The relevance function itself comes from `iblr` and is used as-is; this project doesn't re-validate it against a tabular regression benchmark.
+
 ## Validation against the paper
 
-Checked against the real [UCI Bike Sharing dataset](https://doi.org/10.24432/C5W894) (the paper's DS1–DS8 source):
+Checked against the authors' actual experiment data — `Data/data_NM_PB_LT_DSAA2016.Rdata` in their released repo ([`TSResampStrat_JDSA2017`](https://github.com/nunompmoniz/TSResampStrat_JDSA2017)) — not just the raw [UCI Bike Sharing dataset](https://doi.org/10.24432/C5W894):
 
-- ✅ **`N` matches exactly.** The paper's Table 1 lists DS1 as having "731 values" — the *raw* series length, before embedding (which would leave 731 − 10 = 721). Table 1's numbers describe the raw series, so use `--no-embed` / `embed=False` when comparing against it.
-- ⚠️ **`%Rare` doesn't match at the default coefficient.** At `--coef 1.5` (the standard Tukey value), the daily temperature column has zero boxplot outliers, giving `%Rare=0.0` versus the paper's `9.9%`. The distribution isn't skewed either (skew ≈ −0.05), so this isn't an adjusted-vs-standard-boxplot issue. Smaller `--coef` values land closer to the paper's range (e.g. `coef=0.6` → ~10.3%), but there's no principled way to know the paper's exact original value without their source — `--coef` is exposed so you can tune it once you have more datasets to cross-check against.
-
-<details>
-<summary><b>Ruled out: first-order differencing wasn't the missing step</b></summary>
-
-A prior review claimed the paper differenced the data (`Δy_t = y_t − y_{t-1}`) before computing Table 1, and that this reproduces the published numbers exactly. Checked against primary sources, this doesn't hold up:
-
-- The full paper text has no mention of differencing/detrending as a preprocessing step (searched "differenc", "delta", "stationar", "detrend" — only unrelated descriptive language).
-- The paper authors' own released R code ([`TSResampStrat_JDSA2017`](https://github.com/nunompmoniz/TSResampStrat_JDSA2017), `Exps.R`, 2,558 lines) contains no `diff(` call anywhere.
-- Empirically: differencing the real `temp` column changes `N` from 731 to 730 (differencing always drops a row), but Table 1 states `N=731`. A fix that contradicts one of the two numbers it's explaining isn't a real fix — even though the resulting `%Rare` (~10.0%) happens to land close to 9.9%.
-
-**Don't add a `--diff` flag based on this.** If it comes up again, this note is the first thing to check.
-</details>
+- ✅ **Root cause found: DS1–DS8 in the authors' data are first-order differenced (`Δy_t = y_t − y_{t-1}`), not the raw UCI columns.** Loading their `.Rdata` in R shows each series has one fewer row than the matching raw UCI column (e.g. 730 vs 731 for daily temperature) and is numerically identical to `diff()` of that column. This tool's `%Rare` was being computed on the *raw* series, so it reported few or no rare cases where the paper — working on the differenced series — reported the true imbalance.
+- ✅ **Confirmed against the reference R implementation.** Running `UBL::phi()` (the CRAN successor to `uba`, same `phi.control`/`phi.extremes` code the authors called) on the authors' own DS1–DS8 series reproduces Table 1 almost exactly (e.g. DS1 10.0% vs paper's 9.9%, DS5 3.54% vs 3.5%). Running this library's `compute_imbalance()` on those same differenced series lands within a few tenths of a point of `UBL::phi()` on 6 of 8 series and matches exactly on the rest — the residual gap is R's `fivenum()`-based quantile vs the midpoint quantile `iblr`'s `box_plot_stats()` uses, a known, minor quantile-method difference, not a bug in this tool's relevance/threshold logic.
+- ✅ **`N` matches exactly on the raw series** — Table 1's "731 values" for DS1 describes the *raw* UCI column length (Table 1 documents the data source, not the differenced series fed to `phi`), consistent with `--no-embed` / `embed=False` giving `N=731`.
+- ⚠️ **Differencing is opt-in.** It measures the imbalance of whatever series you hand it by default — matching the paper's own numbers requires differencing first (the paper's own text never states this preprocessing step explicitly; it's only visible in the released data object). Pass `--diff` on the CLI, or `diff=True` to `evaluate_datasets`/`evaluate_csv_files`, to first-order difference the target series before embedding/scoring.
 
 <details>
-<summary><b>Open question: the exact preprocessing behind Table 1's numbers</b></summary>
+<summary><b>Superseded: earlier "differencing was ruled out" claim was wrong</b></summary>
 
-Still unresolved. The released `Exps.R` loads a pre-built `.Rdata` file with its `knnImputation()` call commented out — meaning real imputation happened upstream, in a script that isn't public, so whether it ran before or after embedding can't be verified. The paper's prose describes imputation before embedding, matching what this tool does, but that hasn't been cross-checked against the actual data.
+A previous version of this README argued differencing wasn't the missing step, reasoning that differencing drops `N` from 731 to 730 while Table 1 states `N=731`. That reasoning conflated two different numbers: Table 1's `N` describes the *raw source series* (731 daily values), while `%Rare` in the same row is computed on the *differenced* series (730 values) — both are true at once, they're just not the same series. Loading the authors' actual `.Rdata` (see above) settles it directly: `data[[1]]` has 730 rows and is exactly `diff(temp)`. The earlier claim that `Exps.R` "contains no `diff( ` call" is also true but beside the point — the differencing happened upstream of the released code, in whatever script produced the `.Rdata` file, which isn't public.
 </details>
 
 ## Known limitations

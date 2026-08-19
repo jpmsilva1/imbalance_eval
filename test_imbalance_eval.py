@@ -4,6 +4,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from imbalance_eval import (
     compute_imbalance,
@@ -88,6 +89,57 @@ def test_compute_imbalance_rejects_degenerate_input():
             assert "at least 2 values" in str(e)
 
 
+# First 120 values of diff(day.csv$temp) from the UCI Bike Sharing dataset --
+# i.e. DS1 from Moniz, Branco & Torgo (2017) before it's cut down for this
+# fixture. Independent reference count (n_rare=9) was computed in R via:
+#   ph <- UBL::phi.control(y, method="extremes", extr.type="both", coef=1.5)
+#   sum(UBL::phi(y, ph) >= 0.9)
+# using UBL (the CRAN successor to the `uba` package the paper's own code
+# calls) -- a different implementation of the same relevance function, so
+# this isn't circular. See README's "Validation against the paper" section:
+# the paper differences its series before scoring them; this library doesn't
+# difference for you, so the fixture here is pre-differenced.
+_DS1_DIFF_TEMP_FIXTURE = [
+    0.019311, -0.167114, 0.003636, 0.026957, -0.022609, -0.007826, -0.031522,
+    -0.026667, 0.012500, 0.018258, 0.003636, -0.007727, -0.004130, 0.072463,
+    -0.001666, -0.055834, 0.040834, 0.075507, -0.030507, -0.084167, -0.118370,
+    0.037391, 0.000870, 0.126087, -0.005978, -0.022500, 0.008478, -0.006956,
+    0.020000, -0.035689, 0.011341, 0.067826, -0.073043, 0.024347, 0.022029,
+    0.052500, -0.014166, -0.050834, -0.086050, 0.009565, 0.044743, 0.033409,
+    0.094022, 0.098478, -0.148913, 0.052174, 0.117572, 0.085834, -0.122500,
+    -0.113950, 0.018116, -0.121111, 0.039517, 0.073913, 0.068696, -0.081848,
+    0.060978, 0.063795, -0.140606, 0.068333, -0.136667, 0.063334, 0.122500,
+    -0.007645, -0.114783, 0.030761, 0.003333, 0.093258, -0.072569, 0.012645,
+    0.055181, -0.059131, -0.007826, 0.047826, 0.049783, 0.125000, -0.067500,
+    -0.140000, 0.097935, 0.011232, -0.094710, -0.061957, -0.020833, 0.001666,
+    -0.012790, 0.011305, 0.038152, -0.002500, -0.031667, 0.031667, 0.015000,
+    0.063333, 0.195000, -0.159166, -0.023334, 0.046667, -0.101667, 0.006667,
+    0.084167, 0.168985, -0.093152, -0.090000, 0.055000, -0.020833, -0.015834,
+    0.025834, 0.055833, -0.006667, 0.089167, -0.135833, -0.122500, 0.123333,
+    0.121667, 0.025000, 0.025000, -0.011667, -0.002500, -0.107500, -0.037500,
+    -0.020833,
+]
+
+
+def test_compute_imbalance_matches_reference_r_implementation():
+    stats = compute_imbalance(_DS1_DIFF_TEMP_FIXTURE, rel_thres=0.9)
+
+    assert stats["N"] == 120
+    assert stats["n_rare"] == 9  # R UBL::phi() reference count, see fixture comment above
+
+
+def test_compute_imbalance_warns_when_no_boxplot_outliers():
+    # Same mechanism as raw (non-differenced) daily temp/cnt in the paper's own
+    # Table 1: a uniform series has no boxplot outliers, so phi_ctrl_pts emits
+    # (min,0),(median,0),(max,0) and phi is 0 everywhere -- n_rare=0 is a
+    # property of the data, not a bug, but it's surprising enough to flag.
+    with pytest.warns(UserWarning, match="no boxplot outliers"):
+        stats = compute_imbalance(list(range(100)))
+
+    assert stats["n_rare"] == 0
+    assert stats["IR"] == float("inf")
+
+
 def test_impute_dataframe_fills_nan_and_preserves_present_values():
     df = pd.DataFrame({
         "a": [1, 2, 3, 4, 5],
@@ -167,6 +219,17 @@ def test_evaluate_datasets_can_skip_embedding():
 
     expected = compute_imbalance(series, rel_thres=0.9)
     assert result.iloc[0]["N"] == expected["N"] == len(series)
+
+
+def test_evaluate_datasets_diff_scores_first_order_differences():
+    series = pd.Series(list(range(45, 55)) * 5 + [100000] * 5)
+    datasets = [{"id": "DS1", "name": "Toy", "granularity": "Daily", "series": series}]
+
+    result = evaluate_datasets(datasets, rel_thres=0.9, embed=False, diff=True)
+
+    expected = compute_imbalance(series.diff().dropna(), rel_thres=0.9)
+    assert result.iloc[0]["N"] == expected["N"] == len(series) - 1
+    assert result.iloc[0]["n_rare"] == expected["n_rare"]
 
 
 def test_load_csv_round_trips_and_sorts_by_date(tmp_path):
@@ -277,6 +340,25 @@ def test_cli_single_file_mode(tmp_path):
     ]
     assert result.iloc[0]["ID"] == "DS1"
     assert result.iloc[0]["n_rare"] > 0
+
+
+def test_cli_single_file_mode_with_diff_flag(tmp_path):
+    data_path = _make_toy_data_csv(tmp_path)
+
+    no_diff = subprocess.run(
+        [sys.executable, "imbalance_eval.py", str(data_path),
+         "--target", "temp", "--no-embed", "--threshold", "0.9"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    with_diff = subprocess.run(
+        [sys.executable, "imbalance_eval.py", str(data_path),
+         "--target", "temp", "--no-embed", "--diff", "--threshold", "0.9"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+
+    assert no_diff.returncode == 0, no_diff.stderr
+    assert with_diff.returncode == 0, with_diff.stderr
+    assert no_diff.stdout != with_diff.stdout
 
 
 def test_cli_batch_mode(tmp_path):

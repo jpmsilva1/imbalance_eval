@@ -3,6 +3,7 @@ import contextlib
 import csv
 import pathlib
 import sys
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -71,6 +72,17 @@ def compute_imbalance(
     n = len(y)
     n_rare = sum(1 for p in phi_values if p >= rel_thres)
     n_normal = n - n_rare
+
+    if n_rare == 0 and not any(phi_values):
+        # phi_ctrl_pts found no boxplot outliers at this coef, so it emitted
+        # (min,0),(median,0),(max,0) control points -- phi is 0 everywhere by
+        # construction. %Rare=0 is then a property of the data, not a bug; see
+        # README "Validation against the paper" for the paper's own DS1/DS4.
+        warnings.warn(
+            "compute_imbalance: series has no boxplot outliers at coef="
+            f"{rel_coef} (phi is 0 everywhere), so n_rare=0 and IR=inf. "
+            "This is expected for series with no extreme values, not an error."
+        )
     ir = (n_normal / n_rare) if n_rare > 0 else float("inf")
 
     return {
@@ -89,10 +101,13 @@ def evaluate_datasets(
     embed: bool = True,
     rel_xtrm_type: str = "both",
     rel_coef: float = 1.5,
+    diff: bool = False,
 ) -> pd.DataFrame:
     rows = []
     for ds in datasets:
         target = ds["series"]
+        if diff:
+            target = target.diff().dropna()
         if embed:
             target = time_delay_embedding(target, k=k)["target"]
 
@@ -136,6 +151,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=0.9, help="Relevance threshold (default: 0.9)")
     parser.add_argument("--k", type=int, default=10, help="Time delay embedding size (default: 10)")
     parser.add_argument("--no-embed", action="store_true", help="Skip time delay embedding")
+    parser.add_argument("--diff", action="store_true", help="First-order difference the target series before embedding")
     parser.add_argument("--xtrm-type", default="both", choices=["both", "high", "low"])
     parser.add_argument("--coef", type=float, default=1.5, help="Boxplot coefficient (default: 1.5)")
     parser.add_argument("--output", default=None, help="Save results table to this CSV path")
@@ -159,6 +175,7 @@ def evaluate_csv_files(
     embed: bool = True,
     rel_xtrm_type: str = "both",
     rel_coef: float = 1.5,
+    diff: bool = False,
 ) -> pd.DataFrame:
     if isinstance(target, dict):
         target_by_path = {str(p): col for p, col in target.items()}
@@ -181,7 +198,7 @@ def evaluate_csv_files(
 
     return evaluate_datasets(
         datasets, k=k, rel_thres=rel_thres, embed=embed,
-        rel_xtrm_type=rel_xtrm_type, rel_coef=rel_coef,
+        rel_xtrm_type=rel_xtrm_type, rel_coef=rel_coef, diff=diff,
     )
 
 
@@ -192,7 +209,7 @@ def _evaluate_one(id_, name, granularity, series, k, rel_thres, args) -> pd.Data
     datasets = [{"id": id_, "name": name, "granularity": granularity, "series": series}]
     return evaluate_datasets(
         datasets, k=k, rel_thres=rel_thres, embed=not args.no_embed,
-        rel_xtrm_type=args.xtrm_type, rel_coef=args.coef,
+        rel_xtrm_type=args.xtrm_type, rel_coef=args.coef, diff=args.diff,
     )
 
 
