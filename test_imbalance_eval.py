@@ -48,7 +48,7 @@ def test_compute_imbalance_uniform_distribution_has_no_rare_cases():
     assert stats["N"] == 100
     assert stats["n_rare"] == 0
     assert stats["n_normal"] == 100
-    assert stats["IR"] == float("inf")
+    assert stats["IR"] == 0
     assert stats["%Rare"] == 0.0
 
 
@@ -64,7 +64,7 @@ def test_compute_imbalance_detects_outliers_as_rare():
     assert stats["N"] == 1000
     assert 0 < stats["n_rare"] < stats["N"]
     assert stats["n_normal"] == stats["N"] - stats["n_rare"]
-    assert stats["IR"] == round(stats["n_normal"] / stats["n_rare"], 2)
+    assert stats["IR"] == round(stats["n_rare"] / stats["n_normal"], 2)
     assert stats["%Rare"] == round(100 * stats["n_rare"] / stats["N"], 2)
 
 
@@ -80,7 +80,7 @@ def test_compute_imbalance_accepts_arrays_and_lists():
 
 def test_compute_imbalance_rejects_degenerate_input():
     # pd.Series(5.0) is a valid length-1 Series, so without a guard a scalar
-    # would report {N: 1, n_rare: 0, IR: inf} rather than failing.
+    # would report {N: 1, n_rare: 0, IR: 0} rather than failing.
     for bad in (5.0, [], [42.0]):
         try:
             compute_imbalance(bad)
@@ -137,7 +137,7 @@ def test_compute_imbalance_warns_when_no_boxplot_outliers():
         stats = compute_imbalance(list(range(100)))
 
     assert stats["n_rare"] == 0
-    assert stats["IR"] == float("inf")
+    assert stats["IR"] == 0
 
 
 def test_impute_dataframe_fills_nan_and_preserves_present_values():

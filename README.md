@@ -7,11 +7,11 @@ A CLI and Python library that measures **how imbalanced a time series dataset is
 Point it at a CSV, and it gives you a table like this:
 
 ```
- ID Dataset   N Granularity  n_normal  n_rare   IR  %Rare
-DS1    temp 731        Daily       658      73  9.0  10.0
+ ID Dataset   N Granularity  n_normal  n_rare    IR  %Rare
+DS1    temp 731        Daily       658      73  0.11  10.0
 ```
 
-`N` is the row count, `n_rare` is how many values were flagged extreme, `IR` (imbalance ratio) is `n_normal / n_rare`, and `%Rare` is the percentage of extreme values. This is the same descriptive statistic reported in Table 1 of Moniz, Branco & Torgo (2017), *"Resampling Strategies for Imbalanced Time Series Forecasting"* — this tool implements that paper's relevance-function methodology so you can run it on your own datasets.
+`N` is the row count, `n_rare` is how many values were flagged extreme, `IR` (imbalance ratio) is `n_rare / n_normal`, and `%Rare` is the percentage of extreme values. This is the same descriptive statistic reported in Table 1 of Moniz, Branco & Torgo (2017), *"Resampling Strategies for Imbalanced Time Series Forecasting"* — this tool implements that paper's relevance-function methodology so you can run it on your own datasets.
 
 ## Contents
 
@@ -43,7 +43,7 @@ python imbalance_eval.py day.csv --target temp --date-col dteday
 
 ```
  ID Dataset   N Granularity  n_normal  n_rare  IR  %Rare
-DS1    temp 721                   721       0 inf    0.0
+DS1    temp 721                   721       0   0    0.0
 ```
 
 That's it — you have an imbalance reading for the `temp` column (`N=721` because the default pipeline time-delay-embeds the 731-row series with a 10-step window first — see [How it works](#how-it-works)). Keep reading for batch mode (many datasets at once), using it as a library, and what each flag does.
@@ -53,7 +53,7 @@ That's it — you have an imbalance reading for the `temp` column (`N=721` becau
 1. Take a time series column (e.g. daily temperature, hourly rental counts).
 2. Fit a **relevance function** φ(y) that scores every value from 0 (totally normal) to 1 (totally extreme), based on that column's own boxplot statistics (quartiles, IQR, whiskers).
 3. Apply a **threshold** (default `0.9`, matching the paper). Any value with φ(y) ≥ threshold counts as "rare."
-4. Report `N`, `n_normal`, `n_rare`, `IR` (`n_normal / n_rare`), and `%Rare` (`100 * n_rare / N`).
+4. Report `N`, `n_normal`, `n_rare`, `IR` (`n_rare / n_normal`), and `%Rare` (`100 * n_rare / N`).
 
 The relevance function itself isn't reimplemented here — it comes from the [`ImbalancedLearningRegression`](https://pypi.org/project/ImbalancedLearningRegression/) (iblr) package, the Python port of the R `UBL` package the paper's authors used.
 
@@ -281,7 +281,7 @@ pip install -e ".[dev]"
 pytest test_imbalance_eval.py -v
 ```
 
-15 tests: embedding correctness, relevance/imbalance counting (including edge cases like uniform distributions and infinite IR), imputation, both CLI modes end-to-end via subprocess, and the input-validation error paths.
+15 tests: embedding correctness, relevance/imbalance counting (including edge cases like uniform distributions with zero rare cases), imputation, both CLI modes end-to-end via subprocess, and the input-validation error paths.
 
 ## References
 

@@ -63,7 +63,7 @@ def compute_imbalance(
     y = pd.Series(y)  # iblr's phi() calls .reset_index(); accept arrays/lists too
     if len(y) < 2:
         # A scalar coerces to a length-1 Series, which would otherwise report a
-        # straight-faced {N: 1, n_rare: 0, IR: inf} instead of failing.
+        # straight-faced {N: 1, n_rare: 0, IR: 0} instead of failing.
         raise ValueError(f"compute_imbalance: need at least 2 values, got {len(y)}")
     with _iblr_numpy_quantile_compat():
         ctrl_pts = iblr.phi_ctrl_pts(y, method="auto", xtrm_type=rel_xtrm_type, coef=rel_coef)
@@ -80,10 +80,10 @@ def compute_imbalance(
         # README "Validation against the paper" for the paper's own DS1/DS4.
         warnings.warn(
             "compute_imbalance: series has no boxplot outliers at coef="
-            f"{rel_coef} (phi is 0 everywhere), so n_rare=0 and IR=inf. "
+            f"{rel_coef} (phi is 0 everywhere), so n_rare=0 and IR=0. "
             "This is expected for series with no extreme values, not an error."
         )
-    ir = (n_normal / n_rare) if n_rare > 0 else float("inf")
+    ir = (n_rare / n_normal) if n_normal > 0 else float("inf")
 
     return {
         "N": n,
