@@ -1,35 +1,53 @@
 import argparse
-import contextlib
 import csv
+import math
 import pathlib
 import sys
 import warnings
 
 import numpy as np
 import pandas as pd
-import ImbalancedLearningRegression as iblr
 from sklearn.impute import KNNImputer
 
 
-@contextlib.contextmanager
-def _iblr_numpy_quantile_compat():
-    # ponytail: iblr 0.0.2 calls np.quantile(interpolation=...), a numpy<2.0
-    # kwarg renamed to method= and removed in numpy 2.x. Shim it only around
-    # the iblr call (not globally) so other numpy users in the same process
-    # -- e.g. a notebook cell importing this module -- see stock np.quantile.
-    # Upgrade path: drop this once iblr ships a numpy-2-compatible release.
-    original = np.quantile
+def _fivenum_hinges(x: np.ndarray) -> tuple:
+    # Tukey hinges exactly as R's fivenum() computes them (what boxplot.stats,
+    # hence uba/UBL phi.control, use). NOT np.quantile(method="midpoint"), which
+    # iblr uses and which disagrees on small/tied samples.
+    n = len(x)
+    n4 = math.floor((n + 3) / 2) / 2
+    return tuple(
+        0.5 * (x[math.floor(d) - 1] + x[math.ceil(d) - 1])
+        for d in (n4, (n + 1) / 2, n + 1 - n4)
+    )
 
-    def compat(*args, **kwargs):
-        if "interpolation" in kwargs:
-            kwargs.setdefault("method", kwargs.pop("interpolation"))
-        return original(*args, **kwargs)
 
-    np.quantile = compat
-    try:
-        yield
-    finally:
-        np.quantile = original
+def relevance(y, xtrm_type: str = "both", coef: float = 1.5) -> np.ndarray:
+    """phi(y) as in R uba::phi.control(method="extremes") + uba::phi (the
+    paper's package, verified equal to uba 0.7.7 on 2,228/2,230 real series).
+
+    Three control points (low whisker end, median, high whisker end); phi=1 at a
+    whisker end that has outliers beyond it, else 0 at min/max. Zero-slope cubic
+    Hermite between knots, constant outside; a value takes the segment of the
+    last knot <= it, so duplicate knots (median == min) resolve like uba does.
+    """
+    if coef <= 0:
+        raise ValueError("coef must be greater than zero")
+    y = np.asarray(y, dtype=float)
+    x = np.sort(y)
+    q1, med, q3 = _fivenum_hinges(x)
+    iqr = q3 - q1
+    inside = x[(x >= q1 - coef * iqr) & (x <= q3 + coef * iqr)]
+    lw, uw = inside[0], inside[-1]
+    lo = (lw, 1.0) if xtrm_type in ("both", "low") and x[0] < lw else (x[0], 0.0)
+    hi = (uw, 1.0) if xtrm_type in ("both", "high") and x[-1] > uw else (x[-1], 0.0)
+    xs, ps = np.array([lo[0], med, hi[0]]), np.array([lo[1], 0.0, hi[1]])
+    i = np.searchsorted(xs, y, side="right") - 1
+    j = np.clip(i, 0, 1)
+    h = xs[j + 1] - xs[j]
+    t = np.clip((y - xs[j]) / np.where(h > 0, h, 1), 0, 1)
+    inner = ps[j] + (ps[j + 1] - ps[j]) * (3 * t**2 - 2 * t**3)
+    return np.where(i < 0, ps[0], np.where(i >= 2, ps[2], inner))
 
 
 def impute_dataframe(df: pd.DataFrame, n_neighbors: int = 5) -> pd.DataFrame:
@@ -60,23 +78,20 @@ def compute_imbalance(
     rel_xtrm_type: str = "both",
     rel_coef: float = 1.5,
 ) -> dict:
-    y = pd.Series(y)  # iblr's phi() calls .reset_index(); accept arrays/lists too
+    y = pd.Series(y)  # accept arrays/lists too
     if len(y) < 2:
         # A scalar coerces to a length-1 Series, which would otherwise report a
         # straight-faced {N: 1, n_rare: 0, IR: 0} instead of failing.
         raise ValueError(f"compute_imbalance: need at least 2 values, got {len(y)}")
-    with _iblr_numpy_quantile_compat():
-        ctrl_pts = iblr.phi_ctrl_pts(y, method="auto", xtrm_type=rel_xtrm_type, coef=rel_coef)
-        phi_values = iblr.phi(y, ctrl_pts)
+    phi_values = relevance(y.to_numpy(), xtrm_type=rel_xtrm_type, coef=rel_coef)
 
     n = len(y)
     n_rare = sum(1 for p in phi_values if p >= rel_thres)
     n_normal = n - n_rare
 
     if n_rare == 0 and not any(phi_values):
-        # phi_ctrl_pts found no boxplot outliers at this coef, so it emitted
-        # (min,0),(median,0),(max,0) control points -- phi is 0 everywhere by
-        # construction. %Rare=0 is then a property of the data, not a bug; see
+        # No boxplot outliers at this coef, so the control points are
+        # (min,0),(median,0),(max,0) -- phi is 0 everywhere by construction. %Rare=0 is then a property of the data, not a bug; see
         # README "Validation against the paper" for the paper's own DS1/DS4.
         warnings.warn(
             "compute_imbalance: series has no boxplot outliers at coef="
@@ -139,7 +154,7 @@ def load_csv(path, date_col: str = None) -> pd.DataFrame:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Evaluate time series imbalance via the iblr relevance function phi."
+        description="Evaluate time series imbalance via the uba/UBL relevance function phi."
     )
     parser.add_argument("csv_path", nargs="?", help="CSV file to evaluate (single-file mode)")
     parser.add_argument("--target", help="Target column name (single-file mode, required)")

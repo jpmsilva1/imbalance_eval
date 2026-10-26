@@ -1,6 +1,8 @@
+import json
 import pathlib
 import subprocess
 import sys
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -12,6 +14,7 @@ from imbalance_eval import (
     evaluate_datasets,
     impute_dataframe,
     load_csv,
+    relevance,
     time_delay_embedding,
 )
 
@@ -448,3 +451,26 @@ def test_cli_batch_missing_manifest_column_gives_clear_error(tmp_path):
 
     assert proc.returncode == 2
     assert "target" in proc.stderr
+
+
+# uba_fixtures.json: real series (GluonTS/TSLib, embedded k=10 targets) with
+# n_rare = sum(uba::phi(y, uba::phi.control(y, method="extremes")) >= 0.9)
+# recorded from R uba 0.7.7, the package the paper used. Cases include series
+# where the old iblr midpoint-quantile implementation disagreed, zero-IQR
+# series (uba scores them all rare), and median == min.
+_UBA_FIXTURES = json.loads((REPO_ROOT / "uba_fixtures.json").read_text())
+
+
+@pytest.mark.parametrize("fx", _UBA_FIXTURES, ids=lambda f: f"{f['case']}:{f['id']}")
+def test_compute_imbalance_matches_r_uba(fx):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert compute_imbalance(fx["y"])["n_rare"] == fx["uba_n_rare"]
+
+
+def test_relevance_one_sided_extr_type():
+    y = np.array([0.0] * 20 + [1.0, 2.0] * 10 + [100.0, -100.0])
+    both = relevance(y, "both"); high = relevance(y, "high"); low = relevance(y, "low")
+    assert both[-2] == 1 and both[-1] == 1
+    assert high[-2] == 1 and high[-1] < 1
+    assert low[-1] == 1 and low[-2] < 1

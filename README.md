@@ -32,7 +32,7 @@ DS1    temp 731        Daily       658      73  0.11  10.0
 ## Quick start
 
 ```bash
-pip install ImbalancedLearningRegression pandas numpy scikit-learn
+pip install pandas numpy scikit-learn
 ```
 
 Then run it on any CSV — here using the [UCI Bike Sharing dataset](https://doi.org/10.24432/C5W894) as an example:
@@ -55,26 +55,26 @@ That's it — you have an imbalance reading for the `temp` column (`N=721` becau
 3. Apply a **threshold** (default `0.9`, matching the paper). Any value with φ(y) ≥ threshold counts as "rare."
 4. Report `N`, `n_normal`, `n_rare`, `IR` (`n_rare / n_normal`), and `%Rare` (`100 * n_rare / N`).
 
-The relevance function itself isn't reimplemented here — it comes from the [`ImbalancedLearningRegression`](https://pypi.org/project/ImbalancedLearningRegression/) (iblr) package, the Python port of the R `UBL` package the paper's authors used.
+The relevance function is implemented in `relevance()` and reproduces R's `uba::phi.control(method="extremes")` + `uba::phi` (the paper's package; `UBL` gives identical results). It is verified against `uba` 0.7.7 on recorded real series (`uba_fixtures.json`) and agreed with it on 2,228 of 2,230 sampled real series; the remaining two sit exactly on a fence, where the last floating-point bit decides. It does **not** use `ImbalancedLearningRegression`: that package's `box_plot_stats` uses `np.quantile(method="midpoint")` instead of R's Tukey hinges (`fivenum`), which flips rare/normal counts on small or tied series.
 
-The boxplot in step 2 is the **standard (Tukey) boxplot** — not the skew-adjusted variant (Hubert & Vandervieren, 2008) — matching the paper. Both the paper's method (Ribeiro's 2011 thesis → R `UBL`) and `iblr`'s `box_plot_stats()` compute whiskers the classic way: `Q1 - coef*IQR` / `Q3 + coef*IQR` with `coef=1.5` by default, no skew correction.
+The boxplot in step 2 is the **standard (Tukey) boxplot** with R `fivenum` hinges — not the skew-adjusted variant (Hubert & Vandervieren, 2008) — matching the paper: whiskers are the most extreme observations within `Q1 - coef*IQR` / `Q3 + coef*IQR`, `coef=1.5` by default. A series with zero IQR scores *all* values rare, exactly as `uba`/`UBL` do; treat such results as degenerate.
 
 ## How the code is organized
 
 Everything lives in one file, `imbalance_eval.py`: library functions at the top (usable standalone, e.g. from a notebook), a thin `argparse` CLI at the bottom.
 
-These are the six functions meant to be called directly (the public interface); everything else in the file (`_iblr_numpy_quantile_compat`, `_get_target_series`, `_run_single`, `_run_batch`, `_build_arg_parser`, `_evaluate_one`, `main`) is internal wiring for the CLI, named with a leading underscore.
+These are the six functions meant to be called directly (the public interface); everything else in the file (`_fivenum_hinges`, `_get_target_series`, `_run_single`, `_run_batch`, `_build_arg_parser`, `_evaluate_one`, `main`) is internal wiring for the CLI, named with a leading underscore.
 
 | Function | Signature | Returns | Role |
 |---|---|---|---|
 | `load_csv` | `load_csv(path, date_col: str = None)` | `pd.DataFrame` | Reads a CSV. If `date_col` is given, sorts rows by it and drops the column — pass `None` (the default) to skip both. |
 | `impute_dataframe` | `impute_dataframe(df: pd.DataFrame, n_neighbors: int = 5)` | `pd.DataFrame` | Fills missing values via k-NN, jointly across numeric columns; leaves non-numeric columns untouched; no-ops (returns `df` unchanged) if nothing's missing. |
 | `time_delay_embedding` | `time_delay_embedding(series: pd.Series, k: int = 10)` | `pd.DataFrame` | Builds the `[lag_k, ..., lag_1, target]` lag table the paper trains on. Raises `ValueError` if `k` is too large for `series` to produce any rows. |
-| `compute_imbalance` | `compute_imbalance(y, rel_thres: float = 0.9, rel_xtrm_type: str = "both", rel_coef: float = 1.5)` | `dict` — `{N, n_normal, n_rare, IR, %Rare}` | The core calculation: relevance scores in (via the `iblr` boxplot relevance function), imbalance stats out. `y` accepts a `pd.Series`, list, or array. Raises `ValueError` if `y` has fewer than 2 values. Warns if every relevance score is 0 (no boxplot outliers at this `rel_coef` — see [Validation against the paper](#validation-against-the-paper)). |
+| `compute_imbalance` | `compute_imbalance(y, rel_thres: float = 0.9, rel_xtrm_type: str = "both", rel_coef: float = 1.5)` | `dict` — `{N, n_normal, n_rare, IR, %Rare}` | The core calculation: relevance scores in (via `relevance()`, the R `uba`-equivalent boxplot relevance function), imbalance stats out. `y` accepts a `pd.Series`, list, or array. Raises `ValueError` if `y` has fewer than 2 values. Warns if every relevance score is 0 (no boxplot outliers at this `rel_coef` — see [Validation against the paper](#validation-against-the-paper)). |
 | `evaluate_datasets` | `evaluate_datasets(datasets: list, k: int = 10, rel_thres: float = 0.9, embed: bool = True, rel_xtrm_type: str = "both", rel_coef: float = 1.5, diff: bool = False)` | `pd.DataFrame` — one row per dataset | Runs the full pipeline over a list of `{id, name, series, granularity?}` dicts. `diff=True` first-order differences each series before `embed` runs; `embed=False` skips time-delay embedding and scores the raw (or differenced) series directly. |
 | `evaluate_csv_files` | `evaluate_csv_files(paths: list, target, date_col: str = None, granularity: str = "", k: int = 10, rel_thres: float = 0.9, embed: bool = True, rel_xtrm_type: str = "both", rel_coef: float = 1.5, diff: bool = False)` | `pd.DataFrame` — one row per path | Convenience wrapper for Python callers: loads + imputes each path and calls `evaluate_datasets` for you — no manifest file needed. `target` is either one column name shared by every path, or a `{path: column}` dict for per-file overrides. |
 
-**One implementation detail worth knowing:** `ImbalancedLearningRegression` 0.0.2 calls a numpy keyword (`interpolation=`) that numpy 2.x removed. `_iblr_numpy_quantile_compat()` patches around it for the duration of that one call only, then restores numpy immediately — so importing this module never silently changes numpy's behavior elsewhere in your process (e.g. other cells in a notebook). Delete it once `iblr` ships a numpy-2-compatible release.
+**Behaviour inherited from R:** a value takes the segment of the last control point `<=` it, so when the median equals the minimum (heavily tied series) the duplicate knots resolve the way `uba` resolves them.
 
 ## Usage
 
@@ -250,14 +250,14 @@ On the CLI that flag is `--no-embed`.
 Two caveats worth knowing before you trust the number:
 
 - **A roughly symmetric target will report few or no rare cases** at the default `--coef 1.5`, since it has no values beyond the Tukey whiskers. This is the same effect documented in [Validation against the paper](#validation-against-the-paper) — tune `--coef` there if your target isn't skewed.
-- **This use case isn't validated here.** The DS1–DS8 check in [Validation against the paper](#validation-against-the-paper) validates the *time-series pipeline*. The relevance function itself comes from `iblr` and is used as-is; this project doesn't re-validate it against a tabular regression benchmark.
+- **This use case isn't validated here.** The DS1–DS8 check in [Validation against the paper](#validation-against-the-paper) validates the *time-series pipeline*. The relevance function itself is validated against R `uba` (see above), not against a tabular regression benchmark.
 
 ## Validation against the paper
 
 Checked against the authors' actual experiment data — `Data/data_NM_PB_LT_DSAA2016.Rdata` in their released repo ([`TSResampStrat_JDSA2017`](https://github.com/nunompmoniz/TSResampStrat_JDSA2017)) — not just the raw [UCI Bike Sharing dataset](https://doi.org/10.24432/C5W894):
 
 - ✅ **Root cause found: DS1–DS8 in the authors' data are first-order differenced (`Δy_t = y_t − y_{t-1}`), not the raw UCI columns.** Loading their `.Rdata` in R shows each series has one fewer row than the matching raw UCI column (e.g. 730 vs 731 for daily temperature) and is numerically identical to `diff()` of that column. This tool's `%Rare` was being computed on the *raw* series, so it reported few or no rare cases where the paper — working on the differenced series — reported the true imbalance.
-- ✅ **Confirmed against the reference R implementation.** Running `UBL::phi()` (the CRAN successor to `uba`, same `phi.control`/`phi.extremes` code the authors called) on the authors' own DS1–DS8 series reproduces Table 1 almost exactly (e.g. DS1 10.0% vs paper's 9.9%, DS5 3.54% vs 3.5%). Running this library's `compute_imbalance()` on those same differenced series lands within a few tenths of a point of `UBL::phi()` on 6 of 8 series and matches exactly on the rest — the residual gap is R's `fivenum()`-based quantile vs the midpoint quantile `iblr`'s `box_plot_stats()` uses, a known, minor quantile-method difference, not a bug in this tool's relevance/threshold logic.
+- ✅ **Confirmed against the reference R implementation.** Running `UBL::phi()` (the CRAN successor to `uba`, same `phi.control`/`phi.extremes` code the authors called) on the authors' own DS1–DS8 series reproduces Table 1 almost exactly (e.g. DS1 10.0% vs paper's 9.9%, DS5 3.54% vs 3.5%). Running this library's `compute_imbalance()` on the same series now matches `uba` exactly (the earlier residual gap came from `iblr`'s midpoint quantile, which this library no longer uses).
 - ✅ **`N` matches exactly on the raw series** — Table 1's "731 values" for DS1 describes the *raw* UCI column length (Table 1 documents the data source, not the differenced series fed to `phi`), consistent with `--no-embed` / `embed=False` giving `N=731`.
 - ⚠️ **Differencing is opt-in.** It measures the imbalance of whatever series you hand it by default — matching the paper's own numbers requires differencing first (the paper's own text never states this preprocessing step explicitly; it's only visible in the released data object). Pass `--diff` on the CLI, or `diff=True` to `evaluate_datasets`/`evaluate_csv_files`, to first-order difference the target series before embedding/scoring.
 
@@ -269,7 +269,7 @@ A previous version of this README argued differencing wasn't the missing step, r
 
 ## Known limitations
 
-- **No manual relevance control points** — the paper's method is always automatic (boxplot-derived), so `iblr`'s `method="manual"` option isn't wired up. Adding it later is a small, isolated change.
+- **No manual relevance control points** — the paper's method is always automatic (boxplot-derived), so the `manual` control-point option isn't wired up. Adding it later is a small, isolated change.
 - **No relevance bins or resampling** — this tool only *measures* imbalance; it doesn't implement the paper's actual resampling algorithms.
 - **No dataset auto-download** — bring your own CSVs.
 - **KNN imputation is O(n²)** in scikit-learn's default mode — fine at the paper's scale (largest dataset ~240k rows), worth knowing for much larger inputs with missing values.
@@ -289,6 +289,6 @@ pytest test_imbalance_eval.py -v
 
 **Paper authors' original R code** (used to fact-check preprocessing claims above): https://github.com/nunompmoniz/TSResampStrat_JDSA2017
 
-**Relevance function library:** Branco, P. et al. *ImbalancedLearningRegression* [Python package]. https://pypi.org/project/ImbalancedLearningRegression/ — its `phi()`/`phi_ctrl_pts()` port the method from Ribeiro, R. P. (2011). *Utility-based regression* (PhD dissertation), University of Porto.
+**Relevance function:** R `uba` 0.7.7 / `UBL` (`phi.control`, `phi`), implementing Ribeiro, R. P. (2011). *Utility-based regression* (PhD dissertation), University of Porto.
 
 **Validation dataset:** Fanaee-T, H. (2013). Bike Sharing [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5W894 (CC BY 4.0)

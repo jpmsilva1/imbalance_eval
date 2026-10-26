@@ -5,14 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "imbalance-eval"
 version = "0.1.0"
-description = "Time series imbalance metrics via the iblr relevance function, replicating Moniz, Branco & Torgo (2017) Table 1."
+description = "Time series imbalance metrics via the R uba/UBL relevance function, replicating Moniz, Branco & Torgo (2017) Table 1."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "numpy",
     "pandas",
     "scikit-learn",
-    "ImbalancedLearningRegression",
 ]
 
 [project.optional-dependencies]
